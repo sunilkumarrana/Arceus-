@@ -3,6 +3,7 @@ import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { getSchemeById } from '../api/scheme.api';
 import { explainScheme, intakeProfileFromText, analyzeEligibilityGap } from '../api/ai.api';
 import { scoreSingleScheme } from '../api/recommendation.api';
+import { AuthGate, AuthStatusButton } from '../components/AuthGate';
 
 // Utility to detect URLs and render them as links
 const renderLinksInText = (text) => {
@@ -38,7 +39,7 @@ const renderContent = (content) => {
   return <p className="text-[var(--text)] leading-relaxed whitespace-pre-wrap">{renderLinksInText(content)}</p>;
 };
 
-export default function SchemeDetailPage() {
+function SchemeDetailPageContent() {
   const { id } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -201,7 +202,10 @@ export default function SchemeDetailPage() {
           <button onClick={() => navigate(-1)} className="flex items-center space-x-2 text-[var(--text-muted-on-dark)] hover:text-white font-bold tracking-widest uppercase font-mono text-xs transition-colors">
             <span>← Back</span>
           </button>
-          <span className="text-sm font-bold tracking-widest uppercase text-[var(--gold)] font-mono">Case File</span>
+          <div className="flex items-center space-x-4">
+            <span className="text-sm font-bold tracking-widest uppercase text-[var(--gold)] font-mono">Case File</span>
+            <AuthStatusButton dark />
+          </div>
         </div>
       </header>
 
@@ -471,5 +475,16 @@ export default function SchemeDetailPage() {
 
       </div>
     </div>
+  );
+}
+
+export default function SchemeDetailPage() {
+  return (
+    <AuthGate
+      title="Sign in to view scheme details"
+      subtitle="Sign in with your Google account to view complete eligibility rules and AI-simplified summaries."
+    >
+      <SchemeDetailPageContent />
+    </AuthGate>
   );
 }

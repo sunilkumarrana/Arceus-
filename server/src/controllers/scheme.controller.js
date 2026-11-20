@@ -1,28 +1,18 @@
 // src/controllers/scheme.controller.js
 
-import { Scheme } from "../models/Scheme.js";
+import {
+  listSchemes,
+  findSchemeById,
+  searchSchemesInDb,
+} from "../../../src/db/schemes.ts";
 
 const getAllSchemes = async (req, res) => {
   try {
     const { page: pageQuery, limit: limitQuery, state, level } = req.query;
     const page = parseInt(pageQuery) || 1;
     const limit = parseInt(limitQuery) || 10;
-    const skip = (page - 1) * limit;
 
-    const query = {};
-    if (state && state !== "All") query.state = state;
-    if (level && level !== "All") query.level = level;
-
-    const [schemes, total] = await Promise.all([
-      Scheme.find(query)
-        .select(
-            "scheme_name short_title level categories benefit_type state brief_description description detailed_description"
-        )
-        .sort({ scheme_name: 1 })
-        .skip(skip)
-        .limit(limit),
-      Scheme.countDocuments()
-    ]);
+    const { schemes, total } = await listSchemes({ page, limit, state, level });
 
     res.status(200).json({
       success: true,
@@ -30,19 +20,20 @@ const getAllSchemes = async (req, res) => {
       limit,
       total,
       totalPages: Math.ceil(total / limit),
-      data: schemes
+      data: schemes,
     });
   } catch (error) {
+    console.error("Failed to fetch schemes:", error);
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message || "Failed to fetch schemes",
     });
   }
 };
 
 const getSchemeById = async (req, res) => {
   try {
-    const scheme = await Scheme.findById(req.params.id);
+    const scheme = await findSchemeById(req.params.id);
 
     if (!scheme) {
       return res.status(404).json({
@@ -56,33 +47,30 @@ const getSchemeById = async (req, res) => {
       data: scheme,
     });
   } catch (error) {
+    console.error("Failed to fetch scheme by id:", error);
     res.status(500).json({
       success: false,
-      message: error.message,
+      message: error.message || "Failed to fetch scheme details",
     });
   }
 };
 
 const searchSchemes = async (req, res) => {
-  const { q = "", state, level } = req.query;
+  try {
+    const { q = "", state, level } = req.query;
+    const schemes = await searchSchemesInDb({ q, state, level });
 
-  const query = {
-    $or: [
-      { scheme_name: { $regex: q, $options: "i" } },
-      { categories: { $regex: q, $options: "i" } },
-      { tags: { $regex: q, $options: "i" } }
-    ]
-  };
-
-  if (state && state !== "All") query.state = state;
-  if (level && level !== "All") query.level = level;
-
-  const schemes = await Scheme.find(query);
-
-  res.json({
-    success: true,
-    data: schemes
-  });
+    res.json({
+      success: true,
+      data: schemes,
+    });
+  } catch (error) {
+    console.error("Failed to search schemes:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to search schemes",
+    });
+  }
 };
 
-export {getAllSchemes, getSchemeById, searchSchemes}
+export { getAllSchemes, getSchemeById, searchSchemes };

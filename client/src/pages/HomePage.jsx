@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { getRecommendationsFromProfile } from "../api/recommendation.api";
 import { explainScheme, analyzeEligibilityGap } from "../api/ai.api";
+import { AuthStatusButton } from "../components/AuthGate";
+import { unlockSharedAudioContext } from "../utils/audioUnlock";
 
 
 
@@ -298,7 +300,7 @@ export default function HomePage() {
           </nav>
 
           {/* Header Action Buttons */}
-          <div className="flex items-center space-x-6 z-10">
+          <div className="flex items-center space-x-4 z-10">
             <button 
               onClick={() => navigate('/schemes')}
               className="hidden md:block text-sm font-bold text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
@@ -306,11 +308,15 @@ export default function HomePage() {
               Explore Schemes
             </button>
             <button
-              onClick={() => navigate('/questionnaire')}
+              onClick={() => {
+                unlockSharedAudioContext();
+                navigate('/agent', { state: { autoGreet: true } });
+              }}
               className="bg-[var(--text)] text-[var(--bg)] px-5 py-1.5 rounded-lg text-xs font-bold font-mono tracking-wider hover:opacity-80 hover:-translate-y-[1px] active:translate-y-[1px] transition-all duration-150"
             >
               Find Schemes
             </button>
+            <AuthStatusButton />
           </div>
         </div>
       </header>
@@ -328,7 +334,10 @@ export default function HomePage() {
 
           <div className="pt-2 flex flex-wrap gap-4">
               <button
-                onClick={() => navigate('/questionnaire')}
+                onClick={() => {
+                  unlockSharedAudioContext();
+                  navigate('/agent', { state: { autoGreet: true } });
+                }}
                 onMouseEnter={handleMouse}
                 onMouseLeave={handleMouse}
                 className="
@@ -474,8 +483,19 @@ export default function HomePage() {
                 <h4 className="text-xs font-mono text-[var(--gold)] uppercase font-bold tracking-widest mb-3">Links</h4>
                 <ul className="space-y-2 text-xs text-[var(--text-muted-on-dark)] font-medium">
                   <li>
-                    <button onClick={() => handleScroll(finderRef)} className="hover:text-[var(--gold)] transition">
-                      Finder Form
+                    <button
+                      onClick={() => {
+                        unlockSharedAudioContext();
+                        navigate('/agent', { state: { autoGreet: true } });
+                      }}
+                      className="hover:text-[var(--gold)] transition"
+                    >
+                      AI Scheme Agent
+                    </button>
+                  </li>
+                  <li>
+                    <button onClick={() => navigate('/questionnaire')} className="hover:text-[var(--gold)] transition">
+                      Guided Questionnaire
                     </button>
                   </li>
                   <li>

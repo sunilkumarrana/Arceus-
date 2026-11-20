@@ -1,0 +1,10 @@
+{
+  "name": "GovtCompass",
+  "description": "Discover Indian government schemes, scholarships, subsidies, and welfare programs matched to your eligibility profile.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

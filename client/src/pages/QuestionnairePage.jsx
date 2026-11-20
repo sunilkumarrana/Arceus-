@@ -54,6 +54,7 @@ export default function QuestionnairePage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [questions, setQuestions] = useState([]);
+  const [error, setError] = useState(null);
   
   const [currentStep, setCurrentStep] = useState(0);
   const [answers, setAnswers] = useState({});
@@ -63,23 +64,29 @@ export default function QuestionnairePage() {
   // Animation state
   const [isExiting, setIsExiting] = useState(false);
 
-  useEffect(() => {
-    async function initSession() {
-      try {
-        sessionStorage.removeItem('hasSeenLoading');
-        sessionStorage.removeItem('cachedRecommendations');
-        sessionStorage.removeItem('cachedRecommendationsPage');
-        await createSession();
-        const res = await getAllQuestions();
-        if (res.success && res.data.questions) {
-          setQuestions(res.data.questions);
-        }
-        setTimeout(() => setLoading(false), 1200);
-      } catch (err) {
-        console.error("Failed to initialize session:", err);
-        setLoading(false);
+  const initSession = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      sessionStorage.removeItem('hasSeenLoading');
+      sessionStorage.removeItem('cachedRecommendations');
+      sessionStorage.removeItem('cachedRecommendationsPage');
+      await createSession();
+      const res = await getAllQuestions();
+      if (res.success && Array.isArray(res.data?.questions) && res.data.questions.length > 0) {
+        setQuestions(res.data.questions);
+      } else {
+        setError('Could not load questionnaire questions.');
       }
+      setTimeout(() => setLoading(false), 600);
+    } catch (err) {
+      console.error("Failed to initialize session:", err);
+      setError(err?.response?.data?.message || err?.message || 'Unable to connect to the session service.');
+      setLoading(false);
     }
+  };
+
+  useEffect(() => {
     initSession();
   }, []);
 
@@ -181,7 +188,37 @@ export default function QuestionnairePage() {
     );
   }
 
-  if (questions.length === 0) return null;
+  if (error || questions.length === 0) {
+    return (
+      <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex flex-col items-center justify-center p-6 font-sans">
+        <div className="w-full max-w-md bg-[var(--surface)] border border-black/10 rounded-2xl p-8 text-center shadow-sm">
+          <div className="text-xs font-mono font-bold uppercase tracking-widest text-[var(--gold)] mb-3">
+            Govt Compass
+          </div>
+          <h2 className="text-xl font-display font-bold mb-2">
+            Unable to Load Questionnaire
+          </h2>
+          <p className="text-sm text-[var(--text-muted)] mb-6">
+            {error || 'No questions were returned. You can retry or use our interactive AI Scheme Agent instead.'}
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <button
+              onClick={initSession}
+              className="px-5 py-2.5 rounded-xl bg-[var(--text)] text-[var(--bg)] font-mono text-xs font-bold uppercase tracking-wider hover:opacity-85 transition"
+            >
+              Retry
+            </button>
+            <button
+              onClick={() => navigate('/agent')}
+              className="px-5 py-2.5 rounded-xl border border-black/15 bg-[var(--surface)] text-[var(--text)] font-mono text-xs font-bold uppercase tracking-wider hover:bg-black/5 transition"
+            >
+              Open AI Agent
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const currentQ = questions[currentStep];
   const progress = Math.round(((currentStep) / questions.length) * 100);
@@ -220,9 +257,18 @@ export default function QuestionnairePage() {
           </div>
         </div>
         
-        {/* Bottom: Meta Info */}
-        <div className="hidden md:block text-xs text-[var(--text-muted-on-dark)] opacity-50 font-mono">
-          Secure Session: {localStorage.getItem('sessionId')?.substring(0, 8) || 'Init'}...
+        {/* Bottom: Meta Info & Switch to AI Agent */}
+        <div className="space-y-4">
+          <button
+            onClick={() => navigate('/agent')}
+            className="w-full text-left px-4 py-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 transition-colors"
+          >
+            <div className="text-[10px] font-mono uppercase tracking-widest text-[var(--gold)]">Prefer Voice or Chat?</div>
+            <div className="text-xs font-semibold text-[var(--text-on-dark)] mt-0.5">Switch to AI Scheme Agent →</div>
+          </button>
+          <div className="hidden md:block text-xs text-[var(--text-muted-on-dark)] opacity-50 font-mono">
+            Secure Session: {localStorage.getItem('sessionId')?.substring(0, 8) || 'Init'}...
+          </div>
         </div>
       </div>
 

@@ -1,78 +1,78 @@
-import { Scheme } from "../models/Scheme.js";
-import { fetchOpenRouter } from "../services/openrouter.service.js";
+import { findSchemeById, saveSchemeAiSummary } from "../../../src/db/schemes.ts";
+import { generateGeminiJson, Type } from "../services/gemini.service.js";
+
+const explainSchema = {
+  type: Type.OBJECT,
+  properties: {
+    overview: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
+    benefits: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
+    eligibility: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
+    applicationProcess: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
+  },
+  required: ["overview", "benefits", "eligibility", "applicationProcess"],
+};
 
 export const aiExplainController = async (req, res) => {
   const { schemeId } = req.body;
-  if (!schemeId) return res.status(400).json({ success: false, message: "schemeId is required" });
+  if (!schemeId) {
+    return res.status(400).json({ success: false, message: "schemeId is required" });
+  }
 
   try {
-    const scheme = await Scheme.findById(schemeId);
-    if (!scheme) return res.status(404).json({ success: false, message: "Scheme not found" });
+    const scheme = await findSchemeById(String(schemeId));
+    if (!scheme) {
+      return res.status(404).json({ success: false, message: "Scheme not found" });
+    }
 
-    // Caching logic: if already generated and saved, return instantly
     if (scheme.ai_summary) {
       return res.status(200).json({
         success: true,
         schemeId: scheme._id,
         schemeName: scheme.scheme_name,
-        summary: scheme.ai_summary
+        summary: scheme.ai_summary,
       });
     }
 
-    const response = await fetchOpenRouter({
-      model: "openrouter/auto",
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: `You are an expert at simplifying Indian government schemes for citizens. Read the provided scheme details and rewrite them into very simple, human-readable bullet points.
-CRITICAL INSTRUCTIONS:
-1. You MUST return a valid JSON object.
-2. The JSON object MUST have exactly these four keys: "overview", "benefits", "eligibility", and "applicationProcess".
-3. Each key MUST contain an array of strings (bullet points).
-4. Keep the language extremely simple (5th-grade reading level). No bureaucratic jargon.`
-        },
-        {
-          role: "user",
-          content: `Simplify this scheme into JSON:
+    const summary = await generateGeminiJson({
+      systemInstruction: `You are an expert at simplifying Indian government schemes for citizens.
+Rewrite the provided scheme details into very simple, human-readable bullet points at a 5th-grade reading level with no bureaucratic jargon.
+Provide concise bullet points for each of: overview, benefits, eligibility, and applicationProcess.`,
+      prompt: `Simplify this scheme:
 Scheme Name: ${scheme.scheme_name}
-Description: ${scheme.detailed_description || scheme.description || "Not provided"}
-Benefits: ${scheme.benefits || "Not provided"}
-Eligibility: ${scheme.eligibility || "Not provided"}
-Application Process: ${scheme.application_process || "Not provided"}
+Description: ${scheme.detailed_description || scheme.brief_description || "Not provided"}
+Benefits: ${Array.isArray(scheme.benefits) ? scheme.benefits.join("; ") : scheme.benefits || "Not provided"}
+Eligibility: ${Array.isArray(scheme.eligibility) ? scheme.eligibility.join("; ") : scheme.eligibility || "Not provided"}
+Application Process: ${Array.isArray(scheme.application_process) ? scheme.application_process.join("; ") : scheme.application_process || "Not provided"}
 Categories: ${scheme.categories?.join(", ") || ""}
-Tags: ${scheme.tags?.join(", ") || ""}`
-        }
-      ]
+Tags: ${scheme.tags?.join(", ") || ""}`,
+      responseSchema: explainSchema,
     });
 
-    if (!response.ok) throw new Error("AI service unavailable");
-
-    const data = await response.json();
-    let summary;
-    try {
-      summary = JSON.parse(data.choices[0].message.content.trim());
-    } catch (e) {
-      // Fallback if AI fails to return strict JSON
-      summary = {
-        overview: ["Failed to generate simple overview."],
-        benefits: ["Failed to generate simple benefits."],
-        eligibility: ["Failed to generate simple eligibility."],
-        applicationProcess: ["Failed to generate simple application process."]
-      };
-    }
-    
-    // Save generated explanation to DB for next time
-    scheme.ai_summary = summary;
-    await scheme.save();
+    await saveSchemeAiSummary(scheme._id, summary);
 
     return res.status(200).json({
       success: true,
       schemeId: scheme._id,
       schemeName: scheme.scheme_name,
-      summary
+      summary,
     });
   } catch (err) {
-    return res.status(503).json({ success: false, message: "AI service unavailable" });
+    console.error("AI explain error:", err);
+    return res.status(err?.statusCode || 503).json({
+      success: false,
+      message: err?.message || "AI service unavailable",
+    });
   }
 };

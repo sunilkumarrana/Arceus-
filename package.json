@@ -8,7 +8,11 @@
     "server"
   ],
   "scripts": {
-    "dev": "concurrently -k -n client,server -c blue,green \"npm run dev:client\" \"npm run dev:server\"",
+    "dev": "npm run build:client && npx tsx server/server.js",
+    "build": "npm run build:client",
+    "build:client": "npm run build -w govtcompass-client",
+    "start": "npx tsx server/server.js",
+    "lint": "node --check server/server.js && npx tsx -e \"import('./server/src/app.js').then(() => process.exit(0))\"",
     "dev:client": "npm run dev -w govtcompass-client",
     "dev:server": "npm run dev -w govtcompass-server",
     "install:all": "npm install",
@@ -16,7 +20,16 @@
   },
   "devDependencies": {
     "concurrently": "^10.0.3"
+  },
+  "dependencies": {
+    "@google/genai": "^3.6.1",
+    "@types/pg": "^8.23.1",
+    "dotenv": "^18.0.10",
+    "drizzle-kit": "^0.31.11",
+    "drizzle-orm": "^0.45.4",
+    "firebase": "^13.4.0",
+    "firebase-admin": "^14.5.1",
+    "pg": "^8.23.1",
+    "tsx": "^4.23.15"
   }
 }
-
-

@@ -1,39 +1,62 @@
 import axios from 'axios';
 
+let authTokenProvider = null;
+
+export const setAuthTokenProvider = (provider) => {
+  authTokenProvider = provider;
+};
+
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL,
+  // Always use same-origin relative /api/* paths served by our Express server
+  baseURL: '',
   headers: {
     'Content-Type': 'application/json',
-    'x-api-key': import.meta.env.VITE_API_KEY,
+    'x-api-key': import.meta.env.VITE_API_KEY || 'GovtCompass-Secret-Key-2026',
   },
 });
 
-// Intercept requests to dynamically attach the current session ID
-api.interceptors.request.use((config) => {
+// Attach session ID and Firebase Auth Bearer token on each request
+api.interceptors.request.use(async (config) => {
   const sessionId = localStorage.getItem('sessionId');
   if (sessionId) {
     config.headers['X-Session-ID'] = sessionId;
   }
+
+  if (authTokenProvider) {
+    try {
+      const token = await authTokenProvider();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    } catch (err) {
+      console.warn('Unable to attach auth token:', err);
+    }
+  }
+
   return config;
 });
 
-// Intercept responses to handle session expiration (401)
+// Only clear session state when the backend specifically reports an expired session (not Firebase auth gate)
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response && error.response.status === 401) {
+    const status = error.response?.status;
+    const code = error.response?.data?.code;
+    const message = error.response?.data?.message || '';
+
+    if (
+      status === 401 &&
+      code !== 'AUTH_REQUIRED' &&
+      code !== 'AUTH_INVALID' &&
+      message.toLowerCase().includes('session')
+    ) {
       console.warn('Session expired or invalid. Clearing session ID.');
       localStorage.removeItem('sessionId');
       sessionStorage.removeItem('cachedRecommendations');
       sessionStorage.removeItem('cachedRecommendationsPage');
       sessionStorage.removeItem('hasSeenLoading');
-      
-      // Redirect to home page if not already there, so a new session can be initialized
-      if (window.location.pathname !== '/') {
-        window.location.href = '/';
-      }
     }
+
     return Promise.reject(error);
   }
 );
-

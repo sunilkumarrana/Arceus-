@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getRecommendationsFromSession } from '../api/recommendation.api';
 import { submitAnswer, getCurrentSession } from '../api/session.api';
+import { AuthGate, AuthStatusButton } from '../components/AuthGate';
 
 const getBriefDesc = (scheme) => {
   const desc = scheme.brief_description || scheme.description || scheme.detailed_description;
@@ -258,7 +259,7 @@ function EditProfileModal({ isOpen, onClose, currentProfile, onSave }) {
 }
 
 
-export default function RecommendationsPage() {
+function RecommendationsPageContent() {
   const navigate = useNavigate();
   
   const [results, setResults] = useState(() => {
@@ -409,9 +410,12 @@ export default function RecommendationsPage() {
           <div className="flex items-center space-x-3 select-none">
             <span className="text-xl font-bold tracking-tight font-display leading-none">Govt Compass Dashboard</span>
           </div>
-          <button onClick={() => navigate('/')} className="text-[var(--text-muted-on-dark)] hover:text-[var(--gold)] text-xs font-bold tracking-widest uppercase font-mono transition-colors">
-            Exit ✕
-          </button>
+          <div className="flex items-center space-x-4">
+            <AuthStatusButton dark />
+            <button onClick={() => navigate('/')} className="text-[var(--text-muted-on-dark)] hover:text-[var(--gold)] text-xs font-bold tracking-widest uppercase font-mono transition-colors">
+              Exit ✕
+            </button>
+          </div>
         </div>
       </header>
 
@@ -566,5 +570,16 @@ export default function RecommendationsPage() {
         onSave={handleSaveProfile}
       />
     </div>
+  );
+}
+
+export default function RecommendationsPage() {
+  return (
+    <AuthGate
+      title="Sign in to view your matches"
+      subtitle="Sign in with your Google account to compute and save your personalized scheme recommendations."
+    >
+      <RecommendationsPageContent />
+    </AuthGate>
   );
 }

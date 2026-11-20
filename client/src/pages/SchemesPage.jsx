@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { getSchemes, searchSchemes } from '../api/scheme.api';
 import { intakeProfileFromText } from '../api/ai.api';
 import { getRecommendationsFromProfile } from '../api/recommendation.api';
+import { AuthGate, AuthStatusButton } from '../components/AuthGate';
 
 const getBriefDesc = (scheme) => {
   const desc = scheme.brief_description || scheme.description || scheme.detailed_description;
@@ -44,10 +45,11 @@ const CustomDropdown = ({ value, options, onChange, label }) => {
   );
 };
 
-export default function SchemesPage() {
+function SchemesPageContent() {
   const navigate = useNavigate();
   const [schemes, setSchemes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   
   const [searchMode, setSearchMode] = useState('search'); // 'search' or 'describe'
@@ -58,9 +60,7 @@ export default function SchemesPage() {
   const itemsPerPage = 12;
 
   useEffect(() => {
-    // Reset page when filters change
     setCurrentPage(1);
-    // If search box is empty, automatically refetch when filters change
     if (!searchQuery.trim()) {
       fetchSchemes();
     }
@@ -69,12 +69,13 @@ export default function SchemesPage() {
 
   const fetchSchemes = async () => {
     setLoading(true);
+    setError(null);
     try {
-      // Fetch up to 5000 schemes to support full-database client-side pagination
       const res = await getSchemes(1, 5000, filters);
       setSchemes(res.data || []);
     } catch (e) {
       console.error(e);
+      setError(e?.response?.data?.message || 'Could not load schemes. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -83,6 +84,7 @@ export default function SchemesPage() {
   const handleSearch = async (e) => {
     e.preventDefault();
     setCurrentPage(1);
+    setError(null);
     if (!searchQuery.trim()) {
       fetchSchemes();
       return;
@@ -93,18 +95,22 @@ export default function SchemesPage() {
       setLoading(true);
       try {
         const aiProfileRes = await intakeProfileFromText(searchQuery);
-        const profile = aiProfileRes.data || aiProfileRes.profile || aiProfileRes;
+        const profile = aiProfileRes.extracted || aiProfileRes.data || aiProfileRes.profile || aiProfileRes;
         
-        // Pass filters along with the AI profile
         const payload = { ...profile };
         if (filters.state !== 'All') payload.state = filters.state;
         
         const recommendations = await getRecommendationsFromProfile(payload);
-        setSchemes(recommendations || []);
+        const normalized = (recommendations || []).map((item) => item.scheme_data || item);
+        setSchemes(normalized);
       } catch (err) {
          console.error("AI Intake Failed, falling back to standard search", err);
-         const res = await searchSchemes(searchQuery, filters);
-         setSchemes(res.data || []);
+         try {
+           const res = await searchSchemes(searchQuery, filters);
+           setSchemes(res.data || []);
+         } catch (searchErr) {
+           setError(searchErr?.response?.data?.message || 'Search failed. Please try again.');
+         }
       } finally {
         setIsAiProcessing(false);
         setLoading(false);
@@ -116,6 +122,7 @@ export default function SchemesPage() {
         setSchemes(res.data || []);
       } catch (e) {
         console.error(e);
+        setError(e?.response?.data?.message || 'Search failed. Please try again.');
       } finally {
         setLoading(false);
       }
@@ -130,9 +137,12 @@ export default function SchemesPage() {
           <div className="flex items-center space-x-3 select-none">
             <span className="text-xl font-bold tracking-tight font-display leading-none">Govt Compass Dashboard</span>
           </div>
-          <button onClick={() => navigate('/')} className="text-[var(--text-muted-on-dark)] hover:text-[var(--gold)] text-xs font-bold tracking-widest uppercase font-mono transition-colors">
-            Exit ✕
-          </button>
+          <div className="flex items-center space-x-4">
+            <AuthStatusButton dark />
+            <button onClick={() => navigate('/')} className="text-[var(--text-muted-on-dark)] hover:text-[var(--gold)] text-xs font-bold tracking-widest uppercase font-mono transition-colors">
+              Exit ✕
+            </button>
+          </div>
         </div>
       </header>
 
@@ -148,7 +158,7 @@ export default function SchemesPage() {
               <div className="flex justify-end">
                 <div className="bg-[var(--surface-2)] p-1 rounded-lg border border-black/10 flex">
                   <button type="button" onClick={() => setSearchMode('search')} className={`px-3 py-1.5 text-xs font-bold font-mono uppercase tracking-widest rounded-md transition-colors ${searchMode === 'search' ? 'bg-white shadow-sm text-black' : 'text-[var(--text-muted)]'}`}>Search</button>
-                  <button type="button" disabled className="px-3 py-1.5 text-xs font-bold font-mono uppercase tracking-widest rounded-md opacity-40 cursor-not-allowed text-[var(--text-muted)]">Describe ✦</button>
+                  <button type="button" onClick={() => setSearchMode('describe')} className={`px-3 py-1.5 text-xs font-bold font-mono uppercase tracking-widest rounded-md transition-colors ${searchMode === 'describe' ? 'bg-white shadow-sm text-black' : 'text-[var(--text-muted)] hover:text-black'}`}>Describe ✦</button>
                 </div>
               </div>
               <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
@@ -211,6 +221,13 @@ export default function SchemesPage() {
             )}
           </div>
         </div>
+
+        {error && (
+          <div className="mb-6 bg-[var(--tape)]/10 border border-[var(--tape)]/20 text-[var(--tape)] px-4 py-3 rounded-xl text-sm font-medium flex items-center justify-between">
+            <span>{error}</span>
+            <button onClick={fetchSchemes} className="underline text-xs font-mono font-bold uppercase ml-4">Retry</button>
+          </div>
+        )}
 
         {loading ? (
           <div className="flex justify-center py-20">
@@ -287,5 +304,16 @@ export default function SchemesPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function SchemesPage() {
+  return (
+    <AuthGate
+      title="Sign in to explore schemes"
+      subtitle="Sign in with your Google account to browse, filter, and search government schemes."
+    >
+      <SchemesPageContent />
+    </AuthGate>
   );
 }

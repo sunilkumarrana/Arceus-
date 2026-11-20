@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import HomePage from './pages/HomePage.jsx';
+import AgentPage from './pages/AgentPage.jsx';
 import QuestionnairePage from './pages/QuestionnairePage.jsx';
 import RecommendationsPage from './pages/RecommendationsPage.jsx';
 import SchemeDetailPage from './pages/SchemeDetailPage.jsx';
@@ -9,6 +10,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<HomePage />} />
+      <Route path="/agent" element={<AgentPage />} />
       <Route path="/questionnaire" element={<QuestionnairePage />} />
       <Route path="/recommendations" element={<RecommendationsPage />} />
       <Route path="/scheme/:id" element={<SchemeDetailPage />} />

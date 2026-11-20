@@ -1,61 +1,63 @@
-import { fetchOpenRouter } from "../services/openrouter.service.js";
+import { generateGeminiJson, Type } from "../services/gemini.service.js";
+
+const refineSchema = {
+  type: Type.ARRAY,
+  items: { type: Type.STRING },
+};
 
 export const aiRefineController = async (req, res) => {
   const { query, schemes } = req.body;
   if (!query || !schemes || !Array.isArray(schemes)) {
-    return res.status(400).json({ success: false, message: "query and schemes array are required" });
+    return res.status(400).json({
+      success: false,
+      message: "query and schemes array are required",
+    });
   }
 
   try {
-    const response = await fetchOpenRouter({
-      model: "openrouter/auto",
-      messages: [
-        {
-          role: "system",
-          content: `You are a scheme filter assistant. The user has a list of recommended government schemes and wants to refine them with a natural language query. Return ONLY a flat JSON array of scheme _id strings that match the user's query. No explanation, no markdown, no code fences.\nExample format: ["6a2c27a0013ca70f", "6a2c27a0013ca71a"]`
-        },
-        {
-          role: "user",
-          content: `User query: "${query}"\n\nSchemes:\n${JSON.stringify(schemes.map(s => ({
-            _id: s._id,
-            name: s.scheme_name || s.name,
-            categories: s.categories,
-            tags: s.tags,
-            matched: s.matched
-          })), null, 2)}\n\nReturn ONLY a JSON array of _id string values for schemes that match the query.`
-        }
-      ]
+    const filteredIds = await generateGeminiJson({
+      systemInstruction:
+        "You are a scheme filter assistant. Return a JSON array of scheme _id strings from the provided list that match the user's natural language query.",
+      prompt: `User query: "${query}"
+
+Schemes:
+${JSON.stringify(
+  schemes.map((s) => ({
+    _id: s._id,
+    name: s.scheme_name || s.name,
+    categories: s.categories,
+    tags: s.tags,
+    matched: s.matched,
+  })),
+  null,
+  2
+)}`,
+      responseSchema: refineSchema,
     });
 
-    if (!response.ok) throw new Error("AI service unavailable");
-
-    const data = await response.json();
-    const text = data.choices[0].message.content.trim();
-    
-    let filteredIds = [];
-    try {
-      const clean = text.replace(/```json|```/g, "").trim();
-      filteredIds = JSON.parse(clean);
-      if (!Array.isArray(filteredIds) || filteredIds.length === 0) {
-        throw new Error("Empty or invalid filter result");
-      }
-    } catch (e) {
-      return res.status(200).json({ 
-        success: true, 
-        query, 
-        filteredSchemes: schemes, 
-        warning: "Could not apply filter, showing all results" 
+    if (!Array.isArray(filteredIds) || filteredIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        query,
+        filteredSchemes: schemes,
+        warning: "Could not apply filter, showing all results",
       });
     }
 
-    const filteredSchemes = schemes.filter(s => filteredIds.includes(s._id.toString()));
+    const filteredSchemes = schemes.filter((s) =>
+      filteredIds.includes(String(s._id))
+    );
 
     return res.status(200).json({
       success: true,
       query,
-      filteredSchemes
+      filteredSchemes,
     });
   } catch (err) {
-    return res.status(503).json({ success: false, message: "AI service unavailable" });
+    console.error("AI refine error:", err);
+    return res.status(err?.statusCode || 503).json({
+      success: false,
+      message: err?.message || "AI service unavailable",
+    });
   }
 };

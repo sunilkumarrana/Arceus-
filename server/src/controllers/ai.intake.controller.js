@@ -1,42 +1,61 @@
-import { fetchOpenRouter } from "../services/openrouter.service.js";
+import { generateGeminiJson, Type } from "../services/gemini.service.js";
+
+const intakeSchema = {
+  type: Type.OBJECT,
+  properties: {
+    state: { type: Type.STRING },
+    category: { type: Type.STRING },
+    gender: { type: Type.STRING },
+    incomeRange: { type: Type.STRING },
+    ageRange: { type: Type.STRING },
+    educationLevel: { type: Type.STRING },
+    occupation: { type: Type.STRING },
+    goal: { type: Type.STRING },
+  },
+};
 
 export const aiIntakeController = async (req, res) => {
   const { freeText } = req.body;
-  
+  if (!freeText || !String(freeText).trim()) {
+    return res.status(400).json({ success: false, message: "freeText is required" });
+  }
+
   try {
-    const response = await fetchOpenRouter({
-      model: "openrouter/auto",
-      messages: [
-        {
-          role: "system",
-          content: `You are a profile extraction assistant for an Indian government scheme recommender.\nExtract structured fields from the user's free text. Return ONLY a JSON object with any of these fields if mentioned:\n{\n  "state": string,\n  "category": string,      // Caste: "SC" | "ST" | "OBC" | "EWS" | "General"\n  "gender": string,        // "Male" | "Female" | "Other"\n  "incomeRange": string,   // "0-5k" | "5k-10k" | "10k-25k" | "25k+"\n  "ageRange": string,      // "18-24" | "25-35" | "36-50" | "50-60" | "60+"\n  "educationLevel": string,// "Below 10th" | "10th" | "12th" | "Graduate" | "Postgraduate"\n  "occupation": string,    // "Student" | "Farmer" | "Unemployed" | "Self Employed" | "Salaried"\n  "goal": string           // "Scholarships & Education" | "Healthcare" | "Agriculture" | "Business & Entrepreneurship" | "Housing" | "Employment" | "Skill Development" | "Women Empowerment" | "Financial Assistance"\n}\nOnly include fields you are confident about. Return nothing else — no explanation, no markdown, no code fences.`
-        },
-        { role: "user", content: freeText || "" }
-      ]
+    const parsed = await generateGeminiJson({
+      systemInstruction: `You are a profile extraction assistant for an Indian government scheme recommender.
+Extract structured fields from the user's free text. Only include fields you are confident about:
+- state: Indian state name
+- category: Caste ("SC" | "ST" | "OBC" | "EWS" | "General")
+- gender: ("Male" | "Female" | "Other")
+- incomeRange: ("0-5k" | "5k-10k" | "10k-25k" | "25k+")
+- ageRange: ("18-24" | "25-35" | "36-50" | "50-60" | "60+")
+- educationLevel: ("Below 10th" | "10th" | "12th" | "Graduate" | "Postgraduate")
+- occupation: ("Student" | "Farmer" | "Unemployed" | "Self Employed" | "Salaried")
+- goal: ("Scholarships & Education" | "Healthcare" | "Agriculture" | "Business & Entrepreneurship" | "Housing" | "Employment" | "Skill Development" | "Women Empowerment" | "Financial Assistance")`,
+      prompt: String(freeText),
+      responseSchema: intakeSchema,
     });
 
-    if (!response.ok) throw new Error("AI service unavailable");
-
-    const data = await response.json();
-    const text = data.choices[0].message.content.trim();
-    
-    let parsed = {};
-    try {
-      const clean = text.replace(/```json|```/g, "").trim();
-      parsed = JSON.parse(clean);
-    } catch (e) {
-      return res.status(200).json({ success: false, message: "Could not parse profile from text" });
+    const cleaned = {};
+    for (const [k, v] of Object.entries(parsed || {})) {
+      if (typeof v === "string" && v.trim()) {
+        cleaned[k] = v.trim();
+      }
     }
 
     req.session = req.session || {};
-    req.session.answers = { ...parsed, ...(req.session.answers || {}) };
+    req.session.answers = { ...cleaned, ...(req.session.answers || {}) };
 
     return res.status(200).json({
       success: true,
-      extracted: parsed,
-      merged: req.session.answers
+      extracted: cleaned,
+      merged: req.session.answers,
     });
   } catch (err) {
-    return res.status(503).json({ success: false, message: "AI service unavailable" });
+    console.error("AI intake error:", err);
+    return res.status(err?.statusCode || 503).json({
+      success: false,
+      message: err?.message || "AI service unavailable",
+    });
   }
 };

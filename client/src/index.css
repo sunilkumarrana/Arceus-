@@ -91,3 +91,49 @@
 .animate-float {
   animation: float 6s ease-in-out infinite;
 }
+
+@keyframes orbBreathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.035); }
+}
+
+@keyframes orbSpeakPulse {
+  0%, 100% { transform: scale(1); }
+  35% { transform: scale(1.07); }
+  70% { transform: scale(0.98); }
+}
+
+@keyframes orbCloudDrift {
+  0%, 100% { transform: translate3d(-4%, 2%, 0) rotate(-6deg) scale(1.06); }
+  50% { transform: translate3d(5%, -3%, 0) rotate(5deg) scale(1.12); }
+}
+
+@keyframes orbCloudDriftReverse {
+  0%, 100% { transform: translate3d(4%, -2%, 0) rotate(8deg) scale(1.04); }
+  50% { transform: translate3d(-5%, 4%, 0) rotate(-6deg) scale(1.1); }
+}
+
+@keyframes orbRingExpand {
+  0% { transform: scale(0.95); opacity: 0.55; }
+  100% { transform: scale(1.32); opacity: 0; }
+}
+
+.animate-orb-breathe {
+  animation: orbBreathe 5.5s ease-in-out infinite;
+}
+
+.animate-orb-speak {
+  animation: orbSpeakPulse 1.6s ease-in-out infinite;
+}
+
+.animate-orb-cloud {
+  animation: orbCloudDrift 9s ease-in-out infinite;
+}
+
+.animate-orb-cloud-reverse {
+  animation: orbCloudDriftReverse 12s ease-in-out infinite;
+}
+
+.animate-orb-ring {
+  animation: orbRingExpand 2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}

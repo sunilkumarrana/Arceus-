@@ -7,4 +7,3 @@ const getHealth = (req, res) => {
 };
 
 export { getHealth };
-
