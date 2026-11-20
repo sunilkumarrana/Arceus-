@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { unlockSharedAudioContext } from '../utils/audioUnlock';
-import { prefetchGreetingAudio } from '../utils/greetingPrefetch';
 
 export function AuthStatusButton({ dark = false }) {
   const { user, authLoading, signInWithGoogle, logout } = useAuth();
@@ -83,7 +82,6 @@ export function AuthGate({ children, title = 'Sign in to continue', subtitle = '
     setSigningIn(true);
     try {
       await signInWithGoogle();
-      prefetchGreetingAudio();
     } catch {
       // handled in AuthContext
     } finally {

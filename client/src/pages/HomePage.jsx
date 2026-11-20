@@ -322,7 +322,6 @@ export default function HomePage() {
               Explore Schemes
             </button>
             <button
-              onMouseEnter={() => prefetchGreetingAudio()}
               onClick={() => {
                 unlockSharedAudioContext();
                 prefetchGreetingAudio();
@@ -355,10 +354,7 @@ export default function HomePage() {
                   prefetchGreetingAudio();
                   navigate('/agent', { state: { autoGreet: true } });
                 }}
-                onMouseEnter={(e) => {
-                  handleMouse(e);
-                  prefetchGreetingAudio();
-                }}
+                onMouseEnter={handleMouse}
                 onMouseLeave={handleMouse}
                 className="
                   group relative overflow-hidden

@@ -14,6 +14,26 @@ const VALID_LANGS = new Set(['en', 'hi']);
 const greetingAudioCache = new Map(); // `${voice}::${lang}` -> { audioBase64, audioMimeType, audioVoice }
 const inFlightPrefetches = new Map(); // `${voice}::${lang}` -> Promise
 
+// Client-side cooldown when server reports Gemini TTS free-tier daily quota exhausted
+let geminiTtsCooldownUntil = 0;
+let geminiTtsQuotaNotice = null;
+const CLIENT_TTS_COOLDOWN_MS = 10 * 60 * 1000;
+
+export function isGeminiTtsOnCooldown() {
+  return Date.now() < geminiTtsCooldownUntil;
+}
+
+export function getGeminiTtsQuotaNotice() {
+  return isGeminiTtsOnCooldown() ? geminiTtsQuotaNotice : null;
+}
+
+export function markGeminiTtsQuotaExhausted(notice) {
+  geminiTtsCooldownUntil = Date.now() + CLIENT_TTS_COOLDOWN_MS;
+  geminiTtsQuotaNotice =
+    notice ||
+    'Gemini TTS daily free-tier limit reached — using built-in browser voice. Select a billing-enabled API key in Settings > Secrets for higher Gemini TTS quota.';
+}
+
 export function getSavedAdvisorVoice() {
   try {
     const saved = localStorage.getItem(VOICE_STORAGE_KEY);
@@ -49,6 +69,10 @@ export function getCachedGreetingAudio(voiceName, lang) {
 }
 
 export function prefetchGreetingAudio(voiceName, lang) {
+  if (isGeminiTtsOnCooldown()) {
+    return Promise.resolve(null);
+  }
+
   const voice = VALID_VOICE_IDS.has(voiceName) ? voiceName : getSavedAdvisorVoice();
   const resolvedLang = VALID_LANGS.has(lang) ? lang : getSavedVoiceLanguage();
   const key = `${voice}::${resolvedLang}`;
@@ -69,6 +93,10 @@ export function prefetchGreetingAudio(voiceName, lang) {
         return null;
       }
       return speakAgentText(greetingText, voice).then((res) => {
+        if (res?.quotaExhausted || res?.useBrowserSpeech) {
+          markGeminiTtsQuotaExhausted(res?.quotaNotice);
+          return null;
+        }
         if (res?.success && res?.audioBase64) {
           const entry = {
             audioBase64: res.audioBase64,

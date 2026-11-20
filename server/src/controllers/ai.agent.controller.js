@@ -11,7 +11,6 @@ import {
   Type,
 } from "../services/gemini.service.js";
 
-const GREETING_TEXT = "Hello sir, how can I help you with?";
 const ALL_VOICES = ["Zephyr", "Kore", "Puck", "Charon", "Fenrir"];
 const VALID_VOICES = new Set(ALL_VOICES);
 
@@ -20,9 +19,37 @@ let cachedSchemes = null;
 let cachedSchemesAt = 0;
 const SCHEMES_CACHE_TTL_MS = 5 * 60 * 1000;
 
-// In-memory short-phrase TTS cache (pre-warmed on server boot for instant greetings)
+// In-memory short-phrase TTS cache & in-flight deduplication to preserve Gemini TTS quota
 const ttsClipCache = new Map();
-const MAX_TTS_CACHE_ITEMS = 40;
+const inFlightTtsRequests = new Map();
+const MAX_TTS_CACHE_ITEMS = 120;
+
+// Per-model 429 quota circuit-breaker across official Gemini TTS models
+const TTS_MODELS = ["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts"];
+const ttsModelCooldownUntil = new Map(); // model -> timestampMs
+let lastQuotaWarnAt = 0;
+
+function parseRetryDelayMs(err) {
+  const raw = String(err?.message || "");
+  const match = raw.match(/retryDelay["']?\s*[:=]\s*["']?(\d+)s/i) || raw.match(/retry in\s+(?:(\d+)h)?(?:(\d+)m)?(\d+)/i);
+  if (match) {
+    if (match.length === 2 && match[1]) {
+      const secs = Number(match[1]);
+      if (Number.isFinite(secs) && secs > 0) {
+        return Math.min(secs * 1000, 30 * 60 * 1000);
+      }
+    } else if (match.length >= 4) {
+      const hours = Number(match[1] || 0);
+      const mins = Number(match[2] || 0);
+      const secs = Number(match[3] || 0);
+      const totalMs = (hours * 3600 + mins * 60 + secs) * 1000;
+      if (totalMs > 0) {
+        return Math.min(totalMs, 30 * 60 * 1000);
+      }
+    }
+  }
+  return 10 * 60 * 1000;
+}
 
 async function getCachedSchemes() {
   const now = Date.now();
@@ -94,7 +121,18 @@ const schemeEligibilityAssessmentSchema = {
     },
     summary: {
       type: Type.STRING,
-      description: "One short sentence summarizing whether and why the user qualifies.",
+      description: "One short sentence summarizing whether and why the user qualifies or does not qualify.",
+    },
+    ineligibilityReasons: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description:
+        "When status is 'not_eligible' or any eligibility criterion fails, list each specific failed criterion and the clear reason why the scheme is not applicable to the user (in clear English). Empty array when fully eligible.",
+    },
+    spokenIneligibilityReason: {
+      type: Type.STRING,
+      description:
+        "When status is 'not_eligible' or has failed criteria, a natural 1 to 2 sentence spoken explanation in the required voice language (Hindi Devanagari if Hindi voice mode, otherwise English) naming the scheme and the exact criteria that did not satisfy. Plain speech only, no markdown.",
     },
     checks: {
       type: Type.ARRAY,
@@ -105,6 +143,11 @@ const schemeEligibilityAssessmentSchema = {
           met: {
             type: Type.STRING,
             description: "One of: 'yes', 'no', 'check'",
+          },
+          reason: {
+            type: Type.STRING,
+            description:
+              "Short plain-English explanation of why this specific criterion passed or failed based on the user's answers.",
           },
         },
         required: ["criterion", "met"],
@@ -129,7 +172,7 @@ const agentResponseSchema = {
     spokenSummary: {
       type: Type.STRING,
       description:
-        "Crisp, warm spoken voice reply in 2 to 3 short natural sentences (under 42 words, plain speech with NO markdown, asterisks, bullets, or URLs). In 'ask_eligibility' stage, briefly name the top matching schemes and clearly ask the key eligibility questions so the user knows what to answer. In 'show_details' stage, announce which schemes match their eligibility and note that full eligibility criteria and application steps are now displayed.",
+        "Warm, clear spoken voice reply in plain speech with NO markdown, asterisks, bullets, or URLs. In 'ask_eligibility' stage (under 42 words), briefly name the top matching schemes and ask the key eligibility questions. In 'show_details' stage (up to 65 words), explicitly state which schemes are eligible AND, whenever ANY scheme fails eligibility, clearly speak aloud which schemes are NOT eligible and the exact criteria that were not satisfied.",
     },
     matchedSchemeIds: {
       type: Type.ARRAY,
@@ -231,7 +274,7 @@ function cleanTextForSpeech(text) {
     .replace(/[*#_`~•▪■→↗]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 420);
+    .slice(0, 560);
 }
 
 async function synthesizeSpeech(text, voiceName = "Zephyr") {
@@ -247,72 +290,119 @@ async function synthesizeSpeech(text, voiceName = "Zephyr") {
     return ttsClipCache.get(cacheKey);
   }
 
-  const aiAlpha = getGeminiAlphaClient();
-
-  const response = await withGeminiRetry(
-    () =>
-      aiAlpha.models.generateContent({
-        model: "gemini-3.8-flash-lite-tts",
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: cleanedText }],
-          },
-        ],
-        config: {
-          responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: chosenVoice },
-            },
-          },
-        },
-      }),
-    { maxAttempts: 2, baseDelayMs: 200 }
-  );
-
-  const parts = response.candidates?.[0]?.content?.parts || [];
-  const audioPart = parts.find((p) => p?.inlineData?.data);
-  const normalized = normalizeAudioPartToWav(audioPart);
-
-  if (!normalized) {
-    throw new Error("No audio generated by speech model.");
+  if (inFlightTtsRequests.has(cacheKey)) {
+    return inFlightTtsRequests.get(cacheKey);
   }
 
-  const result = {
-    ...normalized,
-    voiceName: chosenVoice,
-  };
+  const runPromise = (async () => {
+    const aiAlpha = getGeminiAlphaClient();
+    const now = Date.now();
+    const availableModels = TTS_MODELS.filter(
+      (model) => (ttsModelCooldownUntil.get(model) || 0) <= now
+    );
 
-  if (cleanedText.length <= 150) {
-    if (ttsClipCache.size >= MAX_TTS_CACHE_ITEMS) {
-      const oldestKey = ttsClipCache.keys().next().value;
-      ttsClipCache.delete(oldestKey);
+    if (availableModels.length === 0) {
+      const quotaErr = new Error("Gemini TTS free-tier quota limit reached.");
+      quotaErr.statusCode = 429;
+      quotaErr.isQuotaExhausted = true;
+      throw quotaErr;
     }
-    ttsClipCache.set(cacheKey, result);
-  }
 
-  return result;
+    let lastErr = null;
+    let sawQuotaError = false;
+
+    for (const model of availableModels) {
+      try {
+        const response = await withGeminiRetry(
+          () =>
+            aiAlpha.models.generateContent({
+              model,
+              contents: [
+                {
+                  role: "user",
+                  parts: [{ text: cleanedText }],
+                },
+              ],
+              config: {
+                responseModalities: ["AUDIO"],
+                speechConfig: {
+                  voiceConfig: {
+                    prebuiltVoiceConfig: { voiceName: chosenVoice },
+                  },
+                },
+              },
+            }),
+          { maxAttempts: 2, baseDelayMs: 200 }
+        );
+
+        const parts = response.candidates?.[0]?.content?.parts || [];
+        const audioPart = parts.find((p) => p?.inlineData?.data);
+        const normalized = normalizeAudioPartToWav(audioPart);
+
+        if (!normalized) {
+          throw new Error("No audio generated by speech model.");
+        }
+
+        const result = {
+          ...normalized,
+          voiceName: chosenVoice,
+          model,
+        };
+
+        if (ttsClipCache.size >= MAX_TTS_CACHE_ITEMS) {
+          const oldestKey = ttsClipCache.keys().next().value;
+          ttsClipCache.delete(oldestKey);
+        }
+        ttsClipCache.set(cacheKey, result);
+
+        return result;
+      } catch (err) {
+        lastErr = err;
+        const status = getGeminiErrorStatus(err);
+        if (status === 429) {
+          sawQuotaError = true;
+          const cooldownMs = parseRetryDelayMs(err);
+          ttsModelCooldownUntil.set(model, Date.now() + cooldownMs);
+          if (Date.now() - lastQuotaWarnAt > 60_000) {
+            lastQuotaWarnAt = Date.now();
+            console.warn(
+              `Gemini TTS model ${model} hit 429 quota limit; cooling down for ${Math.round(
+                cooldownMs / 60000
+              )}m and failing over.`
+            );
+          }
+          continue;
+        }
+        console.warn(`Gemini TTS failed on ${model} (status ${status}):`, err?.message || err);
+      }
+    }
+
+    if (sawQuotaError && lastErr) {
+      const quotaErr = new Error("Gemini TTS free-tier quota limit reached.");
+      quotaErr.statusCode = 429;
+      quotaErr.isQuotaExhausted = true;
+      throw quotaErr;
+    }
+
+    throw lastErr || new Error("Speech synthesis failed.");
+  })().finally(() => {
+    inFlightTtsRequests.delete(cacheKey);
+  });
+
+  inFlightTtsRequests.set(cacheKey, runPromise);
+  return runPromise;
 }
 
 /**
- * Called once on Express server boot (inside app.listen) to warm PostgreSQL catalog cache
- * and pre-synthesize the default greeting voice so greeting playback is instant (< 0.3s)
- * without exhausting per-minute TTS rate limits.
+ * Called once on Express server boot (inside app.listen) to warm PostgreSQL catalog cache.
+ * Intentionally does NOT pre-call Gemini TTS on boot so free-tier daily TTS quota is preserved
+ * for real user interactions.
  */
 export async function prewarmAgentRuntime() {
   try {
     await getCachedSchemes();
   } catch (err) {
     console.warn("Prewarm schemes cache skipped:", err?.message || err);
-  }
-
-  if (!process.env.GEMINI_API_KEY) return;
-
-  try {
-    await synthesizeSpeech(GREETING_TEXT, "Zephyr");
-  } catch (err) {
-    console.warn("Prewarm default greeting TTS skipped:", err?.message || err);
   }
 }
 
@@ -438,7 +528,7 @@ function normalizeLiveSchemeCard(item, idx) {
 function attachAssessmentsToSchemes(schemes, assessments) {
   if (!Array.isArray(assessments) || assessments.length === 0) return schemes;
 
-  return schemes.map((scheme) => {
+  const assessed = schemes.map((scheme) => {
     const schemeNameLower = String(scheme.scheme_name || "").toLowerCase();
     const match = assessments.find((a) => {
       const aName = String(a?.schemeName || "").toLowerCase();
@@ -451,17 +541,151 @@ function attachAssessmentsToSchemes(schemes, assessments) {
     });
 
     if (!match) return scheme;
+
+    const status = ["eligible", "partially_eligible", "not_eligible"].includes(match.status)
+      ? match.status
+      : "partially_eligible";
+
+    const checks = Array.isArray(match.checks)
+      ? match.checks
+          .filter((c) => c && c.criterion)
+          .map((c) => ({
+            criterion: String(c.criterion).trim(),
+            met: ["yes", "no", "check"].includes(c.met) ? c.met : "check",
+            reason: c.reason ? String(c.reason).trim() : "",
+          }))
+      : [];
+
+    let ineligibilityReasons = Array.isArray(match.ineligibilityReasons)
+      ? match.ineligibilityReasons.map((r) => String(r || "").trim()).filter(Boolean)
+      : [];
+
+    if (ineligibilityReasons.length === 0) {
+      const failedFromChecks = checks
+        .filter((c) => c.met === "no")
+        .map((c) => (c.reason ? `${c.criterion}: ${c.reason}` : c.criterion));
+      if (failedFromChecks.length > 0) {
+        ineligibilityReasons = failedFromChecks;
+      } else if (status === "not_eligible" && match.summary) {
+        ineligibilityReasons = [String(match.summary).trim()];
+      }
+    }
+
     return {
       ...scheme,
       eligibilityAssessment: {
-        status: ["eligible", "partially_eligible", "not_eligible"].includes(match.status)
-          ? match.status
-          : "partially_eligible",
-        summary: match.summary || "",
-        checks: Array.isArray(match.checks) ? match.checks : [],
+        status,
+        summary: match.summary ? String(match.summary).trim() : "",
+        ineligibilityReasons,
+        spokenIneligibilityReason: match.spokenIneligibilityReason
+          ? String(match.spokenIneligibilityReason).trim()
+          : "",
+        checks,
       },
     };
   });
+
+  const statusOrder = { eligible: 0, partially_eligible: 1, not_eligible: 2 };
+  return [...assessed].sort((a, b) => {
+    const rankA = a.eligibilityAssessment ? statusOrder[a.eligibilityAssessment.status] ?? 3 : 3;
+    const rankB = b.eligibilityAssessment ? statusOrder[b.eligibilityAssessment.status] ?? 3 : 3;
+    return rankA - rankB;
+  });
+}
+
+function buildFallbackEligibilityQuestions(matchedSchemes = []) {
+  const combinedText = matchedSchemes
+    .map((s) =>
+      [
+        s.scheme_name,
+        s.ministry,
+        s.brief_description,
+        ...(s.categories || []),
+        ...(s.eligibility || []),
+      ]
+        .filter(Boolean)
+        .join(" ")
+    )
+    .join(" ")
+    .toLowerCase();
+
+  const questions = [];
+
+  if (/\b(startup|dpiit|seed fund|incubator|prototype|venture|entrepreneur|msme|mudra|business|enterprise)\b/.test(combinedText)) {
+    questions.push(
+      {
+        id: "eq-dpiit",
+        question: "Is your startup or enterprise registered / DPIIT-recognized in India?",
+        options: ["Yes, DPIIT-recognized", "Registered (not DPIIT yet)", "Not registered yet"],
+      },
+      {
+        id: "eq-age-stage",
+        question: "How old is your startup or business venture?",
+        options: ["Idea / Pre-revenue", "Under 2 years", "2 to 5 years", "More than 5 years"],
+      },
+      {
+        id: "eq-founder-category",
+        question: "Do you belong to a priority founder category (Woman / SC / ST)?",
+        options: ["Woman Founder", "SC / ST Category", "General / OBC", "Prefer not to say"],
+      }
+    );
+  } else if (/\b(farmer|kisan|agriculture|crop|fasal|landholding)\b/.test(combinedText)) {
+    questions.push(
+      {
+        id: "eq-land",
+        question: "Do you own or cultivate agricultural land in India?",
+        options: ["Yes, own land", "Tenant / Sharecropper", "No agricultural land"],
+      },
+      {
+        id: "eq-income-tax",
+        question: "Are you or your family an income tax payer or government employee?",
+        options: ["No", "Yes"],
+      },
+      {
+        id: "eq-state",
+        question: "Which type of farmer category applies to you?",
+        options: ["Small / Marginal (< 2 hectares)", "Medium / Large Farmer", "Allied / Dairy / Fisheries"],
+      }
+    );
+  } else if (/\b(student|scholarship|education|college|tuition|fellowship)\b/.test(combinedText)) {
+    questions.push(
+      {
+        id: "eq-edu-level",
+        question: "What is your current level of education?",
+        options: ["School (Class 9-12)", "Undergraduate / Diploma", "Postgraduate / PhD", "Not currently enrolled"],
+      },
+      {
+        id: "eq-family-income",
+        question: "What is your annual family income?",
+        options: ["Below ₹2.5 Lakh", "₹2.5 Lakh – ₹8 Lakh", "Above ₹8 Lakh"],
+      },
+      {
+        id: "eq-category",
+        question: "Which social category do you belong to?",
+        options: ["SC / ST", "OBC / EWS", "Minority", "General"],
+      }
+    );
+  } else {
+    questions.push(
+      {
+        id: "eq-resident",
+        question: "Are you an Indian citizen residing in the eligible state?",
+        options: ["Yes", "No", "Not sure"],
+      },
+      {
+        id: "eq-income",
+        question: "What is your approximate annual household income?",
+        options: ["Below ₹2.5 Lakh", "₹2.5 Lakh – ₹8 Lakh", "Above ₹8 Lakh"],
+      },
+      {
+        id: "eq-category",
+        question: "Which applicant category best describes you?",
+        options: ["General", "SC / ST / OBC / EWS", "Woman / Senior Citizen", "Student / Farmer"],
+      }
+    );
+  }
+
+  return questions.slice(0, 4);
 }
 
 export const aiAgentChatController = async (req, res) => {
@@ -519,7 +743,7 @@ export const aiAgentChatController = async (req, res) => {
     });
 
     const activeSchemesBlock =
-      Array.isArray(activeSchemes) && activeSchemes.length > 0
+      hasPendingEligibilityCheck && Array.isArray(activeSchemes) && activeSchemes.length > 0
         ? `\nCurrently Shown Schemes Under Eligibility Check:\n${activeSchemes
             .map(
               (s) =>
@@ -531,7 +755,7 @@ export const aiAgentChatController = async (req, res) => {
         : "";
 
     const pendingQuestionsBlock =
-      Array.isArray(pendingQuestions) && pendingQuestions.length > 0
+      hasPendingEligibilityCheck && Array.isArray(pendingQuestions) && pendingQuestions.length > 0
         ? `\nEligibility Questions Previously Asked To User:\n${pendingQuestions
             .map((q, i) => `${i + 1}. ${q.question}`)
             .join("\n")}\n`
@@ -550,7 +774,7 @@ export const aiAgentChatController = async (req, res) => {
       : "";
 
     const savedAnswers = savedProfileRow?.answers || {};
-    const hasProfile = Object.keys(savedAnswers).length > 0;
+    const hasProfile = hasPendingEligibilityCheck && Object.keys(savedAnswers).length > 0;
 
     const liveContextBlock = liveWebResult?.summary
       ? `\nLive Web Facts:\n${liveWebResult.summary}\n`
@@ -564,10 +788,10 @@ ${activeSchemesBlock}${pendingQuestionsBlock}${answersBlock}${liveContextBlock}$
       normalizedVoiceLang === "hi"
         ? `VOICE LANGUAGE RULE (CRITICAL):
 - The user has enabled HINDI VOICE MODE (Hindi only for speaking).
-- You MUST write "spokenSummary" in warm, clear, natural everyday spoken Hindi using Devanagari script (2 to 3 crisp sentences, under 45 words, NO markdown, asterisks, bullets, or URLs). Address the user respectfully ("जी सर" / "सर").
-- Keep ALL on-screen text and structured UI fields ("reply", "eligibilityQuestions", "eligibilityAssessments", and any "liveSchemes" fields including scheme_name, brief_description, eligibility, application_process, benefits, documents_required) in clear ENGLISH.`
+- You MUST write "spokenSummary" and any "spokenIneligibilityReason" in warm, clear, natural everyday spoken Hindi using Devanagari script (NO markdown, asterisks, bullets, or URLs). Address the user respectfully ("जी सर" / "सर"). Keep "spokenSummary" under 45 words in ask_eligibility, or up to 70 words in show_details when explaining unmet eligibility criteria.
+- Keep ALL on-screen text and structured UI fields ("reply", "eligibilityQuestions", "eligibilityAssessments.summary", "eligibilityAssessments.ineligibilityReasons", "eligibilityAssessments.checks", and any "liveSchemes" fields) in clear ENGLISH.`
         : `VOICE LANGUAGE RULE:
-- Write "spokenSummary" in warm, clear, natural spoken English (2 to 3 crisp sentences, under 42 words, NO markdown, asterisks, bullets, or URLs).
+- Write "spokenSummary" and any "spokenIneligibilityReason" in warm, clear, natural spoken English (NO markdown, asterisks, bullets, or URLs). Keep "spokenSummary" under 42 words in ask_eligibility, or up to 65 words in show_details when explaining unmet eligibility criteria.
 - Keep all structured fields ("eligibilityQuestions", "eligibilityAssessments", "liveSchemes") in clear English.`;
 
     const aiResult = await generateGeminiJson({
@@ -590,9 +814,17 @@ WORKFLOW RULES:
 3. STAGE "show_details" — Whenever the user answers the eligibility questions (either via Hindi/English voice reply to pending questions OR via Structured Eligibility Answers) OR explicitly asks to proceed directly with scheme details/application steps:
    - Set stage: "show_details".
    - Keep/return all relevant matched schemes (matching catalog IDs and/or preserving the schemes currently under eligibility check).
-   - Provide "eligibilityAssessments" for EACH matched scheme evaluating the user's answers (status: 'eligible' | 'partially_eligible' | 'not_eligible', concise summary, and checks[] showing each key criterion as 'yes' | 'no' | 'check').
+   - Provide "eligibilityAssessments" for EACH matched scheme strictly evaluating the user's answers against that scheme's real criteria:
+     * status: 'eligible' | 'partially_eligible' | 'not_eligible' (mark 'not_eligible' whenever a mandatory criterion fails, e.g., not DPIIT-recognized when required, wrong gender/category, income/age limit exceeded, wrong state, or startup older than allowed limit).
+     * summary: concise 1-sentence verdict in English.
+     * ineligibilityReasons: for every 'not_eligible' or 'partially_eligible' scheme with unmet rules, list EVERY specific criterion that did NOT satisfy and the clear reason why the scheme is not applicable (in English).
+     * spokenIneligibilityReason: for every 'not_eligible' or failed-criterion scheme, write a 1 to 2 sentence spoken voice explanation (in the required voice language above) naming the scheme and the exact criteria that failed.
+     * checks[]: list each key criterion with met: 'yes' | 'no' | 'check' and a short 'reason' explaining why it passed or failed.
    - Set eligibilityQuestions: [].
-   - In "spokenSummary" (in the required voice language above), tell the user which schemes they are eligible for and let them know the complete eligibility criteria, documents, and application steps are now displayed on screen.
+   - CRITICAL VOICE RULE FOR "spokenSummary" IN STAGE "show_details":
+     * Write "spokenSummary" in the required voice language above.
+     * If ANY scheme's eligibility criteria failed ('not_eligible' or unmet criteria), you MUST clearly tell the user by voice WHICH scheme(s) are NOT applicable and explicitly state the EXACT criteria that are not eligible (for example: "You are not eligible for Startup India Seed Fund Scheme because your startup is not DPIIT-recognized and is more than 2 years old"), then briefly mention which schemes they DO qualify for (if any) and that full reasons and details are displayed on screen.
+     * If all schemes are eligible, warmly confirm they qualify and let them know the eligibility criteria and application steps are shown on screen.
 
 4. Never invent catalog IDs. If the user asks about a brand-new scheme category while previous questions were pending, switch cleanly to stage "ask_eligibility" for the new category.`,
       prompt,
@@ -622,14 +854,27 @@ WORKFLOW RULES:
       matchedSchemes = [...matchedSchemes, ...extraCards];
     }
 
-    // If evaluating eligibility for currently displayed schemes (Step 2), preserve any activeSchemes (including Step 1 liveSchemes)
-    const resolvedStage = ["chat", "ask_eligibility", "show_details"].includes(aiResult.stage)
-      ? aiResult.stage
-      : hasPendingEligibilityCheck
-        ? "show_details"
+    const userAskedToSkipDirectly =
+      /\b(skip eligibility|proceed directly|just show details|without eligibility|skip form)\b/i.test(
+        trimmedMessage
+      );
+
+    // Deterministically enforce Step 1 ("ask_eligibility") whenever the user discovers schemes
+    // and has NOT yet submitted/answered pending eligibility questions (unless they explicitly asked to skip).
+    let resolvedStage;
+    if (matchedSchemes.length === 0 && !hasPendingEligibilityCheck) {
+      resolvedStage = "chat";
+    } else if (hasPendingEligibilityCheck) {
+      resolvedStage = aiResult.stage === "ask_eligibility" ? "ask_eligibility" : "show_details";
+    } else if (!userAskedToSkipDirectly && matchedSchemes.length > 0) {
+      resolvedStage = "ask_eligibility";
+    } else {
+      resolvedStage = ["chat", "ask_eligibility", "show_details"].includes(aiResult.stage)
+        ? aiResult.stage
         : matchedSchemes.length > 0
           ? "ask_eligibility"
           : "chat";
+    }
 
     if (resolvedStage === "show_details" && Array.isArray(activeSchemes) && activeSchemes.length > 0) {
       const existingNames = new Set(
@@ -649,7 +894,8 @@ WORKFLOW RULES:
       );
     }
 
-    // Normalize eligibility questions for Stage 1
+    // Normalize eligibility questions for Stage 1 — ALWAYS guarantee 3-4 scheme-specific questions
+    // so the Eligibility Criteria Form reliably renders over the blurred schemes.
     let eligibilityQuestions = [];
     if (resolvedStage === "ask_eligibility") {
       eligibilityQuestions = Array.isArray(aiResult.eligibilityQuestions)
@@ -665,6 +911,10 @@ WORKFLOW RULES:
                   : ["Yes", "No", "Not sure"],
             }))
         : [];
+
+      if (eligibilityQuestions.length === 0 && matchedSchemes.length > 0) {
+        eligibilityQuestions = buildFallbackEligibilityQuestions(matchedSchemes);
+      }
     }
 
     const finalStage =
@@ -687,7 +937,31 @@ WORKFLOW RULES:
       }
     }
 
-    const spokenText = aiResult.spokenSummary || aiResult.reply;
+    let spokenText = String(aiResult.spokenSummary || "").trim();
+    if (!spokenText) {
+      if (finalStage === "show_details") {
+        const failedSchemes = matchedSchemes.filter(
+          (s) =>
+            s?.eligibilityAssessment &&
+            (s.eligibilityAssessment.status === "not_eligible" ||
+              (s.eligibilityAssessment.ineligibilityReasons || []).length > 0)
+        );
+        if (failedSchemes.length > 0) {
+          const snippets = failedSchemes.slice(0, 2).map((s) => {
+            if (s.eligibilityAssessment.spokenIneligibilityReason) {
+              return s.eligibilityAssessment.spokenIneligibilityReason;
+            }
+            const reasons = (s.eligibilityAssessment.ineligibilityReasons || []).slice(0, 2).join(", ");
+            return `${s.scheme_name} is not eligible because ${reasons || s.eligibilityAssessment.summary}`;
+          });
+          spokenText = snippets.join(". ");
+        } else {
+          spokenText = aiResult.reply;
+        }
+      } else {
+        spokenText = aiResult.reply;
+      }
+    }
     let audioBase64 = null;
     let audioMimeType = null;
     let audioVoice = null;
@@ -816,19 +1090,37 @@ export const aiSpeakController = async (req, res) => {
     });
   }
 
+  const chosenVoice = VALID_VOICES.has(voiceName) ? voiceName : "Zephyr";
+
   try {
     getCachedSchemes().catch(() => {});
-    const audioResult = await synthesizeSpeech(text, voiceName);
+    const audioResult = await synthesizeSpeech(text, chosenVoice);
 
     return res.status(200).json({
       success: true,
       audioBase64: audioResult.audioBase64,
       mimeType: audioResult.mimeType,
       voiceName: audioResult.voiceName,
+      useBrowserSpeech: false,
+      quotaExhausted: false,
     });
   } catch (err) {
+    const status = err?.statusCode || getGeminiErrorStatus(err);
+    if (err?.isQuotaExhausted || status === 429) {
+      return res.status(200).json({
+        success: true,
+        audioBase64: null,
+        mimeType: null,
+        voiceName: chosenVoice,
+        useBrowserSpeech: true,
+        quotaExhausted: true,
+        quotaNotice:
+          "Gemini TTS daily free-tier limit reached — using built-in browser voice. Select a billing-enabled API key in Settings > Secrets for higher Gemini TTS quota.",
+      });
+    }
+
     console.error("AI speak error:", err);
-    return res.status(err?.statusCode || 503).json({
+    return res.status(status || 503).json({
       success: false,
       message: formatFriendlyGeminiError(err),
     });
@@ -861,8 +1153,16 @@ export const aiSpeakStreamController = async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     return res.end(pcmBuf);
   } catch (err) {
+    const status = err?.statusCode || getGeminiErrorStatus(err);
+    if (err?.isQuotaExhausted || status === 429) {
+      return res.status(429).json({
+        success: false,
+        quotaExhausted: true,
+        message: formatFriendlyGeminiError(err),
+      });
+    }
     console.error("AI speak stream error:", err);
-    return res.status(err?.statusCode || 503).json({
+    return res.status(status || 503).json({
       success: false,
       message: formatFriendlyGeminiError(err),
     });

@@ -12,6 +12,9 @@ import {
   getGreetingText,
   getCachedGreetingAudio,
   prefetchGreetingAudio,
+  isGeminiTtsOnCooldown,
+  getGeminiTtsQuotaNotice,
+  markGeminiTtsQuotaExhausted,
 } from '../utils/greetingPrefetch';
 
 const VOICE_OPTIONS = [
@@ -388,7 +391,7 @@ function EligibilityFormModal({
   );
 }
 
-function SchemeDetailCard({ scheme, onOpenFull }) {
+function SchemeDetailCard({ scheme, onOpenFull, onSpeakReason, isSpeakingThisReason = false }) {
   const eligibility = Array.isArray(scheme.eligibility) ? scheme.eligibility : [];
   const applicationProcess = Array.isArray(scheme.application_process)
     ? scheme.application_process
@@ -397,6 +400,20 @@ function SchemeDetailCard({ scheme, onOpenFull }) {
   const documents = Array.isArray(scheme.documents_required) ? scheme.documents_required : [];
   const officialLink = Array.isArray(scheme.references) && scheme.references[0] ? scheme.references[0] : null;
   const assessment = scheme.eligibilityAssessment || null;
+
+  const failedChecks = Array.isArray(assessment?.checks)
+    ? assessment.checks.filter((chk) => chk?.met === 'no')
+    : [];
+
+  const ineligibilityReasons =
+    Array.isArray(assessment?.ineligibilityReasons) && assessment.ineligibilityReasons.length > 0
+      ? assessment.ineligibilityReasons
+      : failedChecks.map((chk) =>
+          chk.reason ? `${chk.criterion}: ${chk.reason}` : chk.criterion
+        );
+
+  const hasIneligibilityReasons =
+    assessment?.status === 'not_eligible' || ineligibilityReasons.length > 0;
 
   const statusMeta = assessment
     ? {
@@ -411,7 +428,7 @@ function SchemeDetailCard({ scheme, onOpenFull }) {
           bannerClass: 'bg-amber-50/70 border-amber-200 text-amber-900',
         },
         not_eligible: {
-          label: 'Check Criteria',
+          label: 'Not Eligible',
           badgeClass: 'bg-rose-50 text-rose-700 border-rose-200',
           bannerClass: 'bg-rose-50/70 border-rose-200 text-rose-900',
         },
@@ -419,7 +436,11 @@ function SchemeDetailCard({ scheme, onOpenFull }) {
     : null;
 
   return (
-    <article className="bg-white border border-black/10 rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_rgba(0,0,0,0.04)] space-y-5">
+    <article
+      className={`bg-white border rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_rgba(0,0,0,0.04)] space-y-5 ${
+        assessment?.status === 'not_eligible' ? 'border-rose-200/90' : 'border-black/10'
+      }`}
+    >
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 border-b border-black/5 pb-4">
         <div className="space-y-1.5">
@@ -484,8 +505,58 @@ function SchemeDetailCard({ scheme, onOpenFull }) {
         </div>
       </div>
 
-      {/* Personalized Eligibility Assessment Summary */}
-      {assessment?.summary && statusMeta && (
+      {/* Why Not Eligible / Unmet Eligibility Criteria Callout (with Voice Readout) */}
+      {hasIneligibilityReasons && (
+        <div className="bg-rose-50/85 border border-rose-200 rounded-xl p-4 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-xs font-mono font-bold uppercase tracking-wider text-rose-700">
+              {assessment?.status === 'not_eligible'
+                ? 'Why This Scheme Is Not Applicable'
+                : 'Eligibility Criteria Not Satisfied'}
+            </h4>
+            {onSpeakReason && (
+              <button
+                type="button"
+                onClick={() => onSpeakReason(scheme)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold border transition ${
+                  isSpeakingThisReason
+                    ? 'bg-rose-600 text-white border-rose-600'
+                    : 'bg-white text-rose-700 border-rose-200 hover:bg-rose-100/70'
+                }`}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"
+                  />
+                </svg>
+                <span>{isSpeakingThisReason ? 'Stop Voice' : 'Hear Why Not Eligible'}</span>
+              </button>
+            )}
+          </div>
+
+          {assessment?.summary && (
+            <p className="text-xs sm:text-sm font-medium text-rose-900 leading-relaxed">
+              {assessment.summary}
+            </p>
+          )}
+
+          {ineligibilityReasons.length > 0 && (
+            <ul className="space-y-1.5 text-xs sm:text-sm text-rose-900/95 leading-relaxed pt-0.5">
+              {ineligibilityReasons.map((reason, idx) => (
+                <li key={`inelig-${idx}`} className="flex items-start gap-2">
+                  <span className="font-mono font-bold text-rose-600 shrink-0">✕</span>
+                  <span>{reason}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* Personalized Eligibility Assessment Summary (for Eligible / Partially Eligible without failed-criteria box) */}
+      {!hasIneligibilityReasons && assessment?.summary && statusMeta && (
         <div className={`border rounded-xl px-4 py-3 text-xs sm:text-sm font-medium ${statusMeta.bannerClass}`}>
           {assessment.summary}
         </div>
@@ -499,7 +570,7 @@ function SchemeDetailCard({ scheme, onOpenFull }) {
           </h4>
 
           {Array.isArray(assessment?.checks) && assessment.checks.length > 0 && (
-            <ul className="space-y-1.5 text-xs sm:text-sm text-neutral-800 pb-2 border-b border-[#DBEAFE]">
+            <ul className="space-y-2 text-xs sm:text-sm text-neutral-800 pb-2.5 border-b border-[#DBEAFE]">
               {assessment.checks.map((chk, idx) => (
                 <li key={`chk-${idx}`} className="flex items-start gap-2">
                   <span
@@ -513,7 +584,20 @@ function SchemeDetailCard({ scheme, onOpenFull }) {
                   >
                     {chk.met === 'yes' ? '✓' : chk.met === 'no' ? '✕' : '!'}
                   </span>
-                  <span>{chk.criterion}</span>
+                  <div className="space-y-0.5">
+                    <span className={chk.met === 'no' ? 'font-medium text-rose-900' : ''}>
+                      {chk.criterion}
+                    </span>
+                    {chk.reason && (
+                      <p
+                        className={`text-[11px] leading-snug ${
+                          chk.met === 'no' ? 'text-rose-700' : 'text-neutral-500'
+                        }`}
+                      >
+                        {chk.reason}
+                      </p>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>
@@ -648,11 +732,13 @@ function AgentWorkspace() {
   const [voiceLanguage, setVoiceLanguage] = useState(getSavedVoiceLanguage);
   const [speakingMessageId, setSpeakingMessageId] = useState(null);
   const [testingVoice, setTestingVoice] = useState(false);
+  const [ttsQuotaNotice, setTtsQuotaNotice] = useState(getGeminiTtsQuotaNotice);
 
   const selectedVoiceRef = useRef(selectedVoice);
   const voiceLanguageRef = useRef(voiceLanguage);
   const autoSpeakRef = useRef(autoSpeak);
   const matchedSchemesRef = useRef([]);
+  const schemeStageRef = useRef('chat');
   const eligibilityQuestionsRef = useRef([]);
 
   // In-memory conversation history for multi-turn context (never rendered as text bubbles)
@@ -661,6 +747,10 @@ function AgentWorkspace() {
   useEffect(() => {
     matchedSchemesRef.current = matchedSchemes;
   }, [matchedSchemes]);
+
+  useEffect(() => {
+    schemeStageRef.current = schemeStage;
+  }, [schemeStage]);
 
   useEffect(() => {
     eligibilityQuestionsRef.current = eligibilityQuestions;
@@ -1069,12 +1159,15 @@ function AgentWorkspace() {
       let base64 = audioBase64 && audioVoice === activeVoice ? audioBase64 : null;
       let mime = audioMimeType || 'audio/wav';
 
-      // Fetch verified Gemini WAV audio if not already prefetched/cached
-      if (!base64 && text) {
+      // Fetch verified Gemini WAV audio if not already prefetched/cached and not on daily quota cooldown
+      if (!base64 && text && !isGeminiTtsOnCooldown()) {
         try {
           const res = await speakAgentText(text, activeVoice);
           if (playbackSessionRef.current !== sessionToken) return false;
-          if (res?.success && res?.audioBase64) {
+          if (res?.quotaExhausted || res?.useBrowserSpeech) {
+            markGeminiTtsQuotaExhausted(res?.quotaNotice);
+            setTtsQuotaNotice(getGeminiTtsQuotaNotice());
+          } else if (res?.success && res?.audioBase64) {
             base64 = res.audioBase64;
             mime = res.mimeType || 'audio/wav';
             const resolvedVoice = res.voiceName || activeVoice;
@@ -1082,7 +1175,8 @@ function AgentWorkspace() {
               msgId &&
               msgId !== 'initial-greeting' &&
               msgId !== 'voice-test' &&
-              msgId !== 'voice-lang-switch'
+              msgId !== 'voice-lang-switch' &&
+              !String(msgId).startsWith('ineligible-reason-')
             ) {
               setLatestSpokenReply((prev) =>
                 prev && prev.id === msgId
@@ -1092,7 +1186,12 @@ function AgentWorkspace() {
             }
           }
         } catch (ttsFetchErr) {
-          console.warn('Gemini TTS fetch failed, falling back to browser voice:', ttsFetchErr);
+          if (ttsFetchErr?.response?.status === 429) {
+            markGeminiTtsQuotaExhausted(ttsFetchErr?.response?.data?.message);
+            setTtsQuotaNotice(getGeminiTtsQuotaNotice());
+          } else {
+            console.warn('Gemini TTS fetch failed, falling back to browser voice:', ttsFetchErr);
+          }
         }
       }
 
@@ -1146,8 +1245,11 @@ function AgentWorkspace() {
     const currentVoice = selectedVoiceRef.current || 'Zephyr';
     const currentVoiceLanguage = voiceLanguageRef.current || 'en';
     const historyForApi = historyRef.current.slice(-8);
-    const activeSchemesForApi = matchedSchemesRef.current;
-    const pendingQuestionsForApi = eligibilityQuestionsRef.current;
+    const isAnsweringPending =
+      Boolean(structuredAnswers) ||
+      (schemeStageRef.current === 'ask_eligibility' && eligibilityQuestionsRef.current.length > 0);
+    const activeSchemesForApi = isAnsweringPending ? matchedSchemesRef.current : [];
+    const pendingQuestionsForApi = isAnsweringPending ? eligibilityQuestionsRef.current : [];
 
     try {
       // Return scheme cards, eligibility questions/verdicts & crisp spoken summary immediately, then play verified WAV audio
@@ -1176,17 +1278,24 @@ function AgentWorkspace() {
 
       // Update 2-stage scheme flow cleanly
       if (Array.isArray(res.matchedSchemes) && res.matchedSchemes.length > 0) {
+        const returnedQuestions = Array.isArray(res.eligibilityQuestions)
+          ? res.eligibilityQuestions
+          : [];
+        const nextStage =
+          res.stage === 'ask_eligibility' || returnedQuestions.length > 0
+            ? 'ask_eligibility'
+            : 'show_details';
+
         setMatchedSchemes(res.matchedSchemes);
         setFocusedSchemeId(null);
         setLiveSources(Array.isArray(res.liveSources) ? res.liveSources : []);
-        const nextStage = res.stage === 'ask_eligibility' ? 'ask_eligibility' : 'show_details';
         setSchemeStage(nextStage);
+        schemeStageRef.current = nextStage;
+
         if (nextStage === 'ask_eligibility') {
-          setEligibilityQuestions(Array.isArray(res.eligibilityQuestions) ? res.eligibilityQuestions : []);
+          setEligibilityQuestions(returnedQuestions);
+          eligibilityQuestionsRef.current = returnedQuestions;
           setEligibilityAnswers({});
-          setEligibilityExtraNote('');
-        } else {
-          setEligibilityQuestions([]);
           setEligibilityExtraNote('');
         }
       } else if (Array.isArray(res.liveSources) && res.liveSources.length > 0) {
@@ -1270,11 +1379,13 @@ function AgentWorkspace() {
   const handleSkipToAllDetails = () => {
     setFocusedSchemeId(null);
     setSchemeStage('show_details');
+    schemeStageRef.current = 'show_details';
   };
 
   const handleProceedSingleScheme = (scheme) => {
     setFocusedSchemeId(scheme._id);
     setSchemeStage('show_details');
+    schemeStageRef.current = 'show_details';
   };
 
   const stopMediaRecorderAndSend = () => {
@@ -1648,6 +1759,39 @@ function AgentWorkspace() {
     }
   };
 
+  const handleSpeakIneligibilityReason = (scheme) => {
+    if (!scheme?.eligibilityAssessment) return;
+    unlockSharedAudioContext();
+    const reasonMsgId = `ineligible-reason-${scheme._id}`;
+    if (agentStatus === 'speaking' && speakingMessageId === reasonMsgId) {
+      stopAudioPlayback();
+      return;
+    }
+
+    const assessment = scheme.eligibilityAssessment;
+    const activeLang = voiceLanguageRef.current || 'en';
+    const failedChecks = Array.isArray(assessment.checks)
+      ? assessment.checks.filter((c) => c?.met === 'no')
+      : [];
+    const reasons =
+      Array.isArray(assessment.ineligibilityReasons) && assessment.ineligibilityReasons.length > 0
+        ? assessment.ineligibilityReasons
+        : failedChecks.map((c) => (c.reason ? `${c.criterion}, ${c.reason}` : c.criterion));
+
+    const spokenReason =
+      assessment.spokenIneligibilityReason ||
+      (reasons.length > 0
+        ? `You are not eligible for ${scheme.scheme_name} because the following criteria are not satisfied: ${reasons.join('. ')}.`
+        : `${scheme.scheme_name}: ${assessment.summary || 'Some eligibility criteria are not satisfied.'}`);
+
+    playSpokenReply({
+      text: spokenReason,
+      voiceName: selectedVoiceRef.current,
+      lang: activeLang,
+      msgId: reasonMsgId,
+    });
+  };
+
   const handleNewChat = () => {
     stopAudioPlayback();
     stopAllListening();
@@ -1951,6 +2095,12 @@ function AgentWorkspace() {
               {testingVoice ? 'Playing greeting...' : 'Test Advisor Voice'}
             </button>
 
+            {ttsQuotaNotice && (
+              <p className="text-[11px] leading-relaxed text-amber-800 bg-amber-50 border border-amber-200/80 rounded-xl px-3 py-2">
+                {ttsQuotaNotice}
+              </p>
+            )}
+
             <div className="pt-3 border-t border-black/5">
               <AuthStatusButton />
             </div>
@@ -2069,10 +2219,11 @@ function AgentWorkspace() {
                       onClick={() => {
                         setFocusedSchemeId(null);
                         setSchemeStage('ask_eligibility');
+                        schemeStageRef.current = 'ask_eligibility';
                       }}
-                      className="text-xs font-semibold text-neutral-600 hover:text-neutral-900"
+                      className="px-3 py-1 rounded-full bg-[#EFF6FF] border border-[#BFDBFE] text-xs font-semibold text-[#2563EB] hover:bg-[#DBEAFE] transition"
                     >
-                      ← Back to Eligibility Check
+                      Edit Eligibility Form
                     </button>
                   )}
                 </div>
@@ -2087,6 +2238,11 @@ function AgentWorkspace() {
                   scheme={scheme}
                   onOpenFull={(selected) =>
                     navigate(`/scheme/${selected._id}`, { state: { scheme: selected } })
+                  }
+                  onSpeakReason={handleSpeakIneligibilityReason}
+                  isSpeakingThisReason={
+                    agentStatus === 'speaking' &&
+                    speakingMessageId === `ineligible-reason-${scheme._id}`
                   }
                 />
               ))}
