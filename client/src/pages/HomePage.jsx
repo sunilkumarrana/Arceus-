@@ -6,81 +6,131 @@ import { AuthStatusButton } from "../components/AuthGate";
 import { unlockSharedAudioContext } from "../utils/audioUnlock";
 import { prefetchGreetingAudio } from "../utils/greetingPrefetch";
 
+import civicHeroImg from "../assets/images/civic_compass_hero.jpg";
 
+const QUICK_TOPICS = [
+  {
+    title: "Startup Grants",
+    subtitle: "Seed funds & DPIIT support",
+    query: "startup",
+  },
+  {
+    title: "Farmer Welfare",
+    subtitle: "Income & crop protection",
+    query: "farmer",
+  },
+  {
+    title: "Scholarships",
+    subtitle: "Central & state education aid",
+    query: "scholarship",
+  },
+  {
+    title: "Women & MSME",
+    subtitle: "Business credit & subsidies",
+    query: "women",
+  },
+];
 
+function HeroShowcase({ onStartVoice, onExploreTopic, onBrowseAll }) {
+  const [imgFailed, setImgFailed] = useState(false);
 
-// Matched/Failed icons
-const CHECK_ICON = (
-  <svg className="w-4 h-4 text-[var(--ok)] inline mr-1" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-  </svg>
-);
-
-const CROSS_ICON = (
-  <svg className="w-4 h-4 text-[var(--tape)] inline mr-1" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-  </svg>
-);
-
-function Stamp({ value }) {
   return (
-    <div className="w-20 h-20 rounded-full flex flex-col items-center justify-center absolute -top-4 -right-4 bg-[var(--surface)] border-2 border-[var(--gold)] z-20 select-none shadow-sm">
-      <span className="text-[8px] font-semibold uppercase tracking-widest text-[var(--gold)]">MATCH</span>
-      <span className="text-xl font-bold tracking-tight text-[var(--gold)]">{value}%</span>
-    </div>
-  );
-}
+    <div className="bg-[var(--surface)] border border-black/10 rounded-2xl overflow-hidden shadow-[0_20px_50px_-24px_rgba(0,0,0,0.2)]">
+      {/* Architectural Editorial Image */}
+      <div className="relative aspect-[16/10] w-full overflow-hidden bg-[var(--bg-dark)]">
+        {!imgFailed ? (
+          <img
+            src={civicHeroImg}
+            alt="Sunlit Indian civic courtyard blending sandstone arches with modern glass architecture"
+            referrerPolicy="no-referrer"
+            onError={() => setImgFailed(true)}
+            className="w-full h-full object-cover object-center transition-transform duration-700 ease-out hover:scale-[1.03]"
+          />
+        ) : (
+          <div
+            className="w-full h-full flex items-end p-6"
+            style={{
+              background:
+                "linear-gradient(135deg, #171717 0%, #262626 52%, #3f3622 100%)",
+            }}
+          />
+        )}
 
-function HeroCard() {
-  return (
-    <div className="relative mt-8 group cursor-pointer animate-float">
-      {/* Folder Tab */}
-      <div className="absolute -top-6 left-0 bg-[var(--surface-2)] w-fit h-8 rounded-t-lg border-t border-l border-r border-[var(--gold)]/20 flex items-center px-5 z-0 transition-all duration-300 ease-out group-hover:-translate-y-2 group-hover:bg-[var(--surface)] group-hover:border-[var(--gold)]/40">
-        <span className="text-[10px] font-semibold tracking-wide text-[var(--text-muted)] uppercase">ELIGIBILITY REPORT</span>
-      </div>
+        {/* Measured Contrast Scrim */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent pointer-events-none" />
 
-      {/* Main Folder Body */}
-      <div className="relative bg-[var(--surface)] border border-[var(--gold)]/20 rounded-2xl rounded-tl-none p-7 transition-all duration-300 ease-out group-hover:border-[var(--gold)]/40 z-10 overflow-hidden">
-        
-        {/* Soft gradient texture */}
-        <div className="absolute inset-0 opacity-30 pointer-events-none bg-gradient-to-br from-transparent to-[var(--surface-2)]"></div>
-
-        <Stamp value={82} />
-
-      <div className="text-xs font-mono uppercase tracking-widest text-[var(--gold)] border-b border-black/5 pb-2 mb-4">
-        SCHEME PROFILE
-      </div>
-
-      <h3 className="text-2xl font-bold text-[var(--text)] tracking-tight leading-tight pr-12">
-        Startup India Seed Fund Scheme
-      </h3>
-      <p className="text-xs text-[var(--text-muted)] mt-1 font-medium">Department for Promotion of Industry and Internal Trade</p>
-
-      <div className="mt-6 grid grid-cols-2 gap-4">
-        <div className="bg-[var(--bg)] p-3 rounded-lg border border-black/5">
-          <div className="text-xs font-mono font-semibold uppercase text-[var(--ok)] border-b border-[var(--ok)]/10 pb-1 mb-2">
-            ✓ Matched Criteria
+        {/* Unboxed Editorial Caption */}
+        <div className="absolute inset-x-0 bottom-0 p-5 sm:p-6 text-white">
+          <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono text-white/80 tracking-wide">
+            <span>Central &amp; State Schemes</span>
+            <span aria-hidden="true">·</span>
+            <span className="text-[var(--gold)]">English &amp; हिंदी Voice AI</span>
           </div>
-          <ul className="text-xs text-[var(--text)] space-y-1.5 font-medium">
-            <li className="flex items-start">{CHECK_ICON} Entrepreneur</li>
-            <li className="flex items-start">{CHECK_ICON} Technology sector</li>
-          </ul>
-        </div>
-
-        <div className="bg-[var(--bg)] p-3 rounded-lg border border-black/5">
-          <div className="text-xs font-mono font-semibold uppercase text-[var(--tape)] border-b border-[var(--tape)]/10 pb-1 mb-2">
-            ✗ Missing Criteria
-          </div>
-          <ul className="text-xs text-[var(--text)] space-y-1.5 font-medium">
-            <li className="flex items-start">{CROSS_ICON} Min 2yr incorporation</li>
-          </ul>
+          <p className="mt-1.5 text-lg sm:text-xl font-display font-bold leading-snug tracking-tight">
+            Clarity on every scheme before you apply.
+          </p>
         </div>
       </div>
 
-      <div className="mt-6 pt-4 border-t border-black/5 text-xs text-[var(--text-muted)] font-mono relative z-10">
-        <span className="text-[var(--gold)] font-bold">AI ADVICE:</span> You are missing the 2yr incorporation requirement. Consider state-level seed grants instead.
+      {/* Category Quick-Explore Header */}
+      <div className="px-5 py-3 border-b border-black/[0.06] flex items-center justify-between">
+        <span className="text-xs font-semibold text-[var(--text-muted)]">
+          Quick Scheme Directory
+        </span>
+        <button
+          type="button"
+          onClick={onBrowseAll}
+          className="text-xs font-semibold text-[var(--text)] hover:text-[var(--gold)] transition-colors whitespace-nowrap"
+        >
+          Browse all →
+        </button>
       </div>
-    </div>
+
+      {/* Hairline-Separated 2x2 Interactive Category Grid */}
+      <div className="grid grid-cols-2 divide-x divide-y divide-black/[0.06]">
+        {QUICK_TOPICS.map((topic) => (
+          <button
+            key={topic.query}
+            type="button"
+            onClick={() => onExploreTopic(topic.query)}
+            className="group text-left px-5 py-4 hover:bg-[var(--surface-2)]/70 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--gold)]"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-display font-bold text-[var(--text)] group-hover:text-black transition-colors truncate">
+                {topic.title}
+              </span>
+              <span
+                aria-hidden="true"
+                className="text-xs text-[var(--text-muted)] group-hover:translate-x-0.5 group-hover:text-[var(--text)] transition-transform shrink-0"
+              >
+                →
+              </span>
+            </div>
+            <p className="mt-0.5 text-xs text-[var(--text-muted)] truncate">
+              {topic.subtitle}
+            </p>
+          </button>
+        ))}
+      </div>
+
+      {/* Direct Bilingual Voice Advisor Bar */}
+      <button
+        type="button"
+        onClick={onStartVoice}
+        className="w-full bg-[var(--bg-dark)] text-[var(--text-on-dark)] px-5 py-4 flex items-center justify-between gap-4 text-left hover:bg-neutral-900 transition-colors group"
+      >
+        <div className="min-w-0">
+          <div className="text-sm font-display font-bold tracking-tight text-white">
+            Ask the Voice Advisor
+          </div>
+          <div className="text-xs text-[var(--text-muted-on-dark)] truncate">
+            Speak in English or हिंदी for instant eligibility checks
+          </div>
+        </div>
+        <span className="shrink-0 text-xs font-mono font-bold text-[var(--gold)] tracking-wide group-hover:translate-x-0.5 transition-transform whitespace-nowrap">
+          Start Voice →
+        </span>
+      </button>
     </div>
   );
 }
@@ -397,7 +447,17 @@ export default function HomePage() {
         </div>
 
         <div>
-          <HeroCard />
+          <HeroShowcase
+            onStartVoice={() => {
+              unlockSharedAudioContext();
+              prefetchGreetingAudio();
+              navigate('/agent', { state: { autoGreet: true } });
+            }}
+            onExploreTopic={(query) => {
+              navigate('/schemes', { state: { initialQuery: query } });
+            }}
+            onBrowseAll={() => navigate('/schemes')}
+          />
         </div>
       </section>
 

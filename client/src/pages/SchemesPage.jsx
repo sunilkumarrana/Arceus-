@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { getSchemes, searchSchemes } from '../api/scheme.api';
 import { intakeProfileFromText } from '../api/ai.api';
 import { getRecommendationsFromProfile } from '../api/recommendation.api';
@@ -47,10 +47,13 @@ const CustomDropdown = ({ value, options, onChange, label }) => {
 
 function SchemesPageContent() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const initialQuery = typeof location.state?.initialQuery === 'string' ? location.state.initialQuery : '';
+
   const [schemes, setSchemes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState(initialQuery);
   
   const [searchMode, setSearchMode] = useState('search'); // 'search' or 'describe'
   const [filters, setFilters] = useState({ state: 'All', level: 'All' });
@@ -61,7 +64,21 @@ function SchemesPageContent() {
 
   useEffect(() => {
     setCurrentPage(1);
-    if (!searchQuery.trim()) {
+    if (searchQuery.trim()) {
+      (async () => {
+        setLoading(true);
+        setError(null);
+        try {
+          const res = await searchSchemes(searchQuery.trim(), filters);
+          setSchemes(res.data || []);
+        } catch (e) {
+          console.error(e);
+          setError(e?.response?.data?.message || 'Could not load schemes. Please try again.');
+        } finally {
+          setLoading(false);
+        }
+      })();
+    } else {
       fetchSchemes();
     }
     // eslint-disable-next-line
