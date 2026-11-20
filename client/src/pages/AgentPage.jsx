@@ -6,7 +6,10 @@ import { ensureAudioContextRunning, unlockSharedAudioContext } from '../utils/au
 import {
   GREETING_TEXT,
   VOICE_STORAGE_KEY,
+  VOICE_LANG_STORAGE_KEY,
   getSavedAdvisorVoice,
+  getSavedVoiceLanguage,
+  getGreetingText,
   getCachedGreetingAudio,
   prefetchGreetingAudio,
 } from '../utils/greetingPrefetch';
@@ -17,6 +20,11 @@ const VOICE_OPTIONS = [
   { id: 'Puck', label: 'Puck (Friendly & Upbeat)' },
   { id: 'Charon', label: 'Charon (Deep & Formal)' },
   { id: 'Fenrir', label: 'Fenrir (Crisp & Direct)' },
+];
+
+const VOICE_LANGUAGE_OPTIONS = [
+  { id: 'en', shortLabel: 'EN', label: 'English' },
+  { id: 'hi', shortLabel: 'हिं', label: 'हिंदी (Hindi)' },
 ];
 
 const BROWSER_VOICE_PROFILES = {
@@ -637,10 +645,12 @@ function AgentWorkspace() {
   // Voice settings (persisted and mirrored in refs to avoid stale closures in voice callbacks)
   const [autoSpeak, setAutoSpeak] = useState(true);
   const [selectedVoice, setSelectedVoice] = useState(loadSavedVoice);
+  const [voiceLanguage, setVoiceLanguage] = useState(getSavedVoiceLanguage);
   const [speakingMessageId, setSpeakingMessageId] = useState(null);
   const [testingVoice, setTestingVoice] = useState(false);
 
   const selectedVoiceRef = useRef(selectedVoice);
+  const voiceLanguageRef = useRef(voiceLanguage);
   const autoSpeakRef = useRef(autoSpeak);
   const matchedSchemesRef = useRef([]);
   const eligibilityQuestionsRef = useRef([]);
@@ -664,6 +674,15 @@ function AgentWorkspace() {
       // ignore
     }
   }, [selectedVoice]);
+
+  useEffect(() => {
+    voiceLanguageRef.current = voiceLanguage;
+    try {
+      localStorage.setItem(VOICE_LANG_STORAGE_KEY, voiceLanguage);
+    } catch {
+      // ignore
+    }
+  }, [voiceLanguage]);
 
   useEffect(() => {
     autoSpeakRef.current = autoSpeak;
@@ -707,16 +726,20 @@ function AgentWorkspace() {
     if (!greetedRef.current) {
       (async () => {
         const activeVoice = selectedVoiceRef.current || 'Zephyr';
-        const cached = getCachedGreetingAudio(activeVoice) || (await prefetchGreetingAudio(activeVoice));
+        const activeLang = voiceLanguageRef.current || 'en';
+        const cached =
+          getCachedGreetingAudio(activeVoice, activeLang) ||
+          (await prefetchGreetingAudio(activeVoice, activeLang));
         if (cancelled || !mountedRef.current || greetedRef.current) return;
 
         greetedRef.current = true;
         const spoke = await playSpokenReply({
-          text: GREETING_TEXT,
+          text: getGreetingText(activeLang),
           audioBase64: cached?.audioBase64 || null,
           audioMimeType: cached?.audioMimeType || 'audio/wav',
           audioVoice: cached?.audioVoice || activeVoice,
           voiceName: activeVoice,
+          lang: activeLang,
           msgId: 'initial-greeting',
           silentIfBlocked: true,
         });
@@ -839,7 +862,7 @@ function AgentWorkspace() {
     setAgentStatus((prev) => (prev === 'speaking' ? 'idle' : prev));
   };
 
-  const speakWithBrowserSpeech = (text, msgId, sessionToken, voiceName) => {
+  const speakWithBrowserSpeech = (text, msgId, sessionToken, voiceName, lang) => {
     return new Promise((resolve) => {
       if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text) {
         resolve(false);
@@ -848,22 +871,31 @@ function AgentWorkspace() {
       try {
         window.speechSynthesis.cancel();
         const activeVoice = voiceName || selectedVoiceRef.current || 'Zephyr';
+        const activeLang = lang || voiceLanguageRef.current || 'en';
         const profile = BROWSER_VOICE_PROFILES[activeVoice] || BROWSER_VOICE_PROFILES.Zephyr;
 
         const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = activeLang === 'hi' ? 'hi-IN' : 'en-IN';
         utterance.rate = profile.rate;
         utterance.pitch = profile.pitch;
 
         const allVoices = window.speechSynthesis.getVoices() || [];
-        const enVoices = allVoices.filter((v) => /^en/i.test(v.lang));
-        const pool = enVoices.length > 0 ? enVoices : allVoices;
+        let pool = allVoices;
+        if (activeLang === 'hi') {
+          const hiVoices = allVoices.filter((v) => /^hi/i.test(v.lang) || /hindi/i.test(v.name));
+          const enInVoices = allVoices.filter((v) => /en[-_]IN/i.test(v.lang));
+          pool = hiVoices.length > 0 ? hiVoices : enInVoices.length > 0 ? enInVoices : allVoices;
+        } else {
+          const enVoices = allVoices.filter((v) => /^en/i.test(v.lang));
+          pool = enVoices.length > 0 ? enVoices : allVoices;
+        }
 
         const isFemaleName = (name) =>
-          /female|zira|samantha|victoria|karen|moira|tessa|neerja|heera|aria|jenny|sara|susan|hazel|linda/i.test(
+          /female|zira|samantha|victoria|karen|moira|tessa|neerja|heera|kalpana|swara|lekha|aria|jenny|sara|susan|hazel|linda/i.test(
             name
           );
         const isMaleName = (name) =>
-          /male|david|mark|daniel|alex|rishi|prabhat|ravi|george|james|guy|ryan|richard|fred/i.test(
+          /male|david|mark|daniel|alex|rishi|prabhat|ravi|hemant|madhur|george|james|guy|ryan|richard|fred/i.test(
             name
           );
 
@@ -1020,6 +1052,7 @@ function AgentWorkspace() {
     audioMimeType,
     audioVoice,
     voiceName,
+    lang,
     msgId,
     silentIfBlocked = false,
   }) => {
@@ -1027,6 +1060,7 @@ function AgentWorkspace() {
     stopAudioPlayback();
     const sessionToken = playbackSessionRef.current;
     const activeVoice = voiceName || selectedVoiceRef.current || 'Zephyr';
+    const activeLang = lang || voiceLanguageRef.current || 'en';
 
     setAgentStatus('speaking');
     setSpeakingMessageId(msgId);
@@ -1044,7 +1078,12 @@ function AgentWorkspace() {
             base64 = res.audioBase64;
             mime = res.mimeType || 'audio/wav';
             const resolvedVoice = res.voiceName || activeVoice;
-            if (msgId && msgId !== 'initial-greeting' && msgId !== 'voice-test') {
+            if (
+              msgId &&
+              msgId !== 'initial-greeting' &&
+              msgId !== 'voice-test' &&
+              msgId !== 'voice-lang-switch'
+            ) {
               setLatestSpokenReply((prev) =>
                 prev && prev.id === msgId
                   ? { ...prev, audioBase64: base64, audioMimeType: mime, audioVoice: resolvedVoice }
@@ -1067,7 +1106,13 @@ function AgentWorkspace() {
 
       // Tier 3: Distinct per-voice browser speechSynthesis fallback
       if (text) {
-        const spokeFallback = await speakWithBrowserSpeech(text, msgId, sessionToken, activeVoice);
+        const spokeFallback = await speakWithBrowserSpeech(
+          text,
+          msgId,
+          sessionToken,
+          activeVoice,
+          activeLang
+        );
         if (spokeFallback) return true;
       }
 
@@ -1099,6 +1144,7 @@ function AgentWorkspace() {
     setAgentStatus('thinking');
 
     const currentVoice = selectedVoiceRef.current || 'Zephyr';
+    const currentVoiceLanguage = voiceLanguageRef.current || 'en';
     const historyForApi = historyRef.current.slice(-8);
     const activeSchemesForApi = matchedSchemesRef.current;
     const pendingQuestionsForApi = eligibilityQuestionsRef.current;
@@ -1108,6 +1154,7 @@ function AgentWorkspace() {
       const res = await askSchemeAgent(trimmed, historyForApi, {
         includeAudio: false,
         voiceName: currentVoice,
+        voiceLanguage: currentVoiceLanguage,
         activeSchemes: activeSchemesForApi,
         pendingQuestions: pendingQuestionsForApi,
         eligibilityAnswers: structuredAnswers,
@@ -1369,7 +1416,7 @@ function AgentWorkspace() {
         setAgentStatus('transcribing');
         try {
           const base64 = await blobToBase64(audioBlob);
-          const res = await transcribeVoice(base64, mimeType);
+          const res = await transcribeVoice(base64, mimeType, voiceLanguageRef.current || 'en');
           const transcript = res?.transcript?.trim();
           if (!transcript) {
             setAgentStatus('idle');
@@ -1415,7 +1462,7 @@ function AgentWorkspace() {
 
     try {
       const recognition = new SpeechRecognitionCtor();
-      recognition.lang = 'en-IN';
+      recognition.lang = voiceLanguageRef.current === 'hi' ? 'hi-IN' : 'en-IN';
       recognition.continuous = false;
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
@@ -1518,15 +1565,52 @@ function AgentWorkspace() {
     }
   };
 
+  const handleVoiceLanguageChange = async (newLang) => {
+    if (newLang !== 'en' && newLang !== 'hi') return;
+    if (newLang === voiceLanguageRef.current) return;
+
+    unlockSharedAudioContext();
+    stopAllListening();
+    stopAudioPlayback();
+
+    voiceLanguageRef.current = newLang;
+    setVoiceLanguage(newLang);
+    setError(null);
+
+    const activeVoice = selectedVoiceRef.current || selectedVoice || 'Zephyr';
+    const confirmText =
+      newLang === 'hi'
+        ? 'नमस्ते सर, हिंदी वॉइस मोड चालू है। आप हिंदी में बोलकर सरकारी योजनाओं के बारे में पूछ सकते हैं।'
+        : 'English voice mode is active. How can I help you with government schemes today?';
+
+    if (autoSpeakRef.current) {
+      const spoke = await playSpokenReply({
+        text: confirmText,
+        voiceName: activeVoice,
+        lang: newLang,
+        msgId: 'voice-lang-switch',
+      });
+      if (mountedRef.current && spoke) {
+        startListening({ silentOnNoSpeech: true });
+      }
+    }
+  };
+
   const handleVoiceChange = async (newVoice) => {
     unlockSharedAudioContext();
     selectedVoiceRef.current = newVoice;
     setSelectedVoice(newVoice);
     setError(null);
     setTestingVoice(true);
+    const activeLang = voiceLanguageRef.current || 'en';
+    const sampleText =
+      activeLang === 'hi'
+        ? `नमस्ते सर, मैं ${newVoice} हूँ। आज मैं आपकी सरकारी योजनाओं में कैसे मदद कर सकता हूँ?`
+        : `Hello sir, this is ${newVoice}. How can I help you with government schemes today?`;
     await playSpokenReply({
-      text: `Hello sir, this is ${newVoice}. How can I help you with government schemes today?`,
+      text: sampleText,
       voiceName: newVoice,
+      lang: activeLang,
       msgId: 'voice-test',
     });
     setTestingVoice(false);
@@ -1535,11 +1619,13 @@ function AgentWorkspace() {
   const handleTestVoice = async () => {
     unlockSharedAudioContext();
     const activeVoice = selectedVoiceRef.current || selectedVoice;
+    const activeLang = voiceLanguageRef.current || 'en';
     setTestingVoice(true);
     setError(null);
     await playSpokenReply({
-      text: GREETING_TEXT,
+      text: getGreetingText(activeLang),
       voiceName: activeVoice,
+      lang: activeLang,
       msgId: 'voice-test',
     });
     setTestingVoice(false);
@@ -1625,8 +1711,34 @@ function AgentWorkspace() {
           </svg>
         </button>
 
-        {/* Right circular voice toggle + settings controls */}
+        {/* Right voice language toggle + mute toggle + settings controls */}
         <div className="flex items-center gap-2">
+          <div
+            role="group"
+            aria-label="Voice speaking language"
+            title="Switch speaking & voice command language (English / Hindi)"
+            className="h-11 rounded-full bg-white border border-black/[0.06] shadow-[0_2px_10px_rgba(0,0,0,0.05)] p-1 flex items-center gap-0.5"
+          >
+            {VOICE_LANGUAGE_OPTIONS.map((opt) => {
+              const isSelected = voiceLanguage === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => handleVoiceLanguageChange(opt.id)}
+                  aria-pressed={isSelected}
+                  className={`h-9 px-3 rounded-full text-xs font-semibold transition active:scale-95 ${
+                    isSelected
+                      ? 'bg-[#2563EB] text-white shadow-sm'
+                      : 'text-neutral-600 hover:text-neutral-900 hover:bg-neutral-100'
+                  }`}
+                >
+                  {opt.shortLabel}
+                </button>
+              );
+            })}
+          </div>
+
           <button
             type="button"
             onClick={() => {
@@ -1788,6 +1900,34 @@ function AgentWorkspace() {
             </label>
 
             <div>
+              <div className="text-xs font-semibold text-neutral-800 mb-0.5">
+                Voice Language <span className="font-normal text-neutral-400">(Speaking Only)</span>
+              </div>
+              <p className="text-[11px] text-neutral-500 mb-2">
+                Speak &amp; listen in English or Hindi; on-screen details stay in English
+              </p>
+              <div className="grid grid-cols-2 gap-1.5 bg-neutral-100 p-1 rounded-xl">
+                {VOICE_LANGUAGE_OPTIONS.map((opt) => {
+                  const isSelected = voiceLanguage === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => handleVoiceLanguageChange(opt.id)}
+                      className={`py-1.5 px-2.5 rounded-lg text-xs font-semibold transition ${
+                        isSelected
+                          ? 'bg-white text-[#2563EB] shadow-sm'
+                          : 'text-neutral-600 hover:text-neutral-900'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
               <div className="text-xs font-semibold text-neutral-800 mb-1.5">Advisor Voice</div>
               <select
                 value={selectedVoice}
@@ -1841,7 +1981,9 @@ function AgentWorkspace() {
 
             {agentStatus === 'idle' && !hasSchemes && (
               <p className="mt-2 text-xs text-neutral-400">
-                Tap the orb to speak
+                {voiceLanguage === 'hi'
+                  ? 'Tap the orb & speak in Hindi (हिंदी)'
+                  : 'Tap the orb to speak'}
               </p>
             )}
 

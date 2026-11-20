@@ -2,13 +2,17 @@ import { speakAgentText } from '../api/ai.api';
 import { getAuthHeaders } from '../api/api';
 
 export const GREETING_TEXT = 'Hello sir, how can I help you with?';
+export const GREETING_TEXT_HI = 'नमस्ते सर, मैं आपकी सरकारी योजनाओं में कैसे मदद कर सकता हूँ?';
+
 export const VOICE_STORAGE_KEY = 'govtcompass_advisor_voice';
+export const VOICE_LANG_STORAGE_KEY = 'govtcompass_voice_language';
 
 const VALID_VOICE_IDS = new Set(['Zephyr', 'Kore', 'Puck', 'Charon', 'Fenrir']);
+const VALID_LANGS = new Set(['en', 'hi']);
 
 // Client-side memory cache & in-flight deduplication for instant greeting playback
-const greetingAudioCache = new Map(); // voiceName -> { audioBase64, audioMimeType, audioVoice }
-const inFlightPrefetches = new Map(); // voiceName -> Promise
+const greetingAudioCache = new Map(); // `${voice}::${lang}` -> { audioBase64, audioMimeType, audioVoice }
+const inFlightPrefetches = new Map(); // `${voice}::${lang}` -> Promise
 
 export function getSavedAdvisorVoice() {
   try {
@@ -22,36 +26,56 @@ export function getSavedAdvisorVoice() {
   return 'Zephyr';
 }
 
-export function getCachedGreetingAudio(voiceName) {
-  const voice = VALID_VOICE_IDS.has(voiceName) ? voiceName : getSavedAdvisorVoice();
-  return greetingAudioCache.get(voice) || null;
+export function getSavedVoiceLanguage() {
+  try {
+    const saved = localStorage.getItem(VOICE_LANG_STORAGE_KEY);
+    if (saved && VALID_LANGS.has(saved)) {
+      return saved;
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return 'en';
 }
 
-export function prefetchGreetingAudio(voiceName) {
+export function getGreetingText(lang = 'en') {
+  return lang === 'hi' ? GREETING_TEXT_HI : GREETING_TEXT;
+}
+
+export function getCachedGreetingAudio(voiceName, lang) {
   const voice = VALID_VOICE_IDS.has(voiceName) ? voiceName : getSavedAdvisorVoice();
+  const resolvedLang = VALID_LANGS.has(lang) ? lang : getSavedVoiceLanguage();
+  return greetingAudioCache.get(`${voice}::${resolvedLang}`) || null;
+}
 
-  if (greetingAudioCache.has(voice)) {
-    return Promise.resolve(greetingAudioCache.get(voice));
+export function prefetchGreetingAudio(voiceName, lang) {
+  const voice = VALID_VOICE_IDS.has(voiceName) ? voiceName : getSavedAdvisorVoice();
+  const resolvedLang = VALID_LANGS.has(lang) ? lang : getSavedVoiceLanguage();
+  const key = `${voice}::${resolvedLang}`;
+
+  if (greetingAudioCache.has(key)) {
+    return Promise.resolve(greetingAudioCache.get(key));
   }
 
-  if (inFlightPrefetches.has(voice)) {
-    return inFlightPrefetches.get(voice);
+  if (inFlightPrefetches.has(key)) {
+    return inFlightPrefetches.get(key);
   }
+
+  const greetingText = getGreetingText(resolvedLang);
 
   const promise = getAuthHeaders()
     .then((headers) => {
-      // Only prefetch when an authenticated Bearer token is available
       if (!headers?.Authorization) {
         return null;
       }
-      return speakAgentText(GREETING_TEXT, voice).then((res) => {
+      return speakAgentText(greetingText, voice).then((res) => {
         if (res?.success && res?.audioBase64) {
           const entry = {
             audioBase64: res.audioBase64,
             audioMimeType: res.mimeType || 'audio/wav',
             audioVoice: res.voiceName || voice,
           };
-          greetingAudioCache.set(voice, entry);
+          greetingAudioCache.set(key, entry);
           return entry;
         }
         return null;
@@ -59,9 +83,9 @@ export function prefetchGreetingAudio(voiceName) {
     })
     .catch(() => null)
     .finally(() => {
-      inFlightPrefetches.delete(voice);
+      inFlightPrefetches.delete(key);
     });
 
-  inFlightPrefetches.set(voice, promise);
+  inFlightPrefetches.set(key, promise);
   return promise;
 }

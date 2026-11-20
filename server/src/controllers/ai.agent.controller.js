@@ -470,6 +470,7 @@ export const aiAgentChatController = async (req, res) => {
     history = [],
     includeAudio = false,
     voiceName = "Zephyr",
+    voiceLanguage = "en",
     activeSchemes = [],
     pendingQuestions = [],
     eligibilityAnswers = null,
@@ -482,6 +483,7 @@ export const aiAgentChatController = async (req, res) => {
     });
   }
 
+  const normalizedVoiceLang = voiceLanguage === "hi" ? "hi" : "en";
   const trimmedMessage = String(message).trim();
   const hasPendingEligibilityCheck =
     (Array.isArray(pendingQuestions) && pendingQuestions.length > 0 && Array.isArray(activeSchemes) && activeSchemes.length > 0) ||
@@ -558,29 +560,41 @@ export const aiAgentChatController = async (req, res) => {
 ${compactCatalog.join("\n")}
 ${activeSchemesBlock}${pendingQuestionsBlock}${answersBlock}${liveContextBlock}${recentHistory ? `History:\n${recentHistory}\n` : ""}Latest User Message: ${trimmedMessage}`;
 
+    const voiceLanguageRule =
+      normalizedVoiceLang === "hi"
+        ? `VOICE LANGUAGE RULE (CRITICAL):
+- The user has enabled HINDI VOICE MODE (Hindi only for speaking).
+- You MUST write "spokenSummary" in warm, clear, natural everyday spoken Hindi using Devanagari script (2 to 3 crisp sentences, under 45 words, NO markdown, asterisks, bullets, or URLs). Address the user respectfully ("जी सर" / "सर").
+- Keep ALL on-screen text and structured UI fields ("reply", "eligibilityQuestions", "eligibilityAssessments", and any "liveSchemes" fields including scheme_name, brief_description, eligibility, application_process, benefits, documents_required) in clear ENGLISH.`
+        : `VOICE LANGUAGE RULE:
+- Write "spokenSummary" in warm, clear, natural spoken English (2 to 3 crisp sentences, under 42 words, NO markdown, asterisks, bullets, or URLs).
+- Keep all structured fields ("eligibilityQuestions", "eligibilityAssessments", "liveSchemes") in clear English.`;
+
     const aiResult = await generateGeminiJson({
-      systemInstruction: `You are GovtCompass AI, an ultra-responsive Indian government scheme voice advisor with a structured 2-step eligibility guidance workflow.
+      systemInstruction: `You are GovtCompass AI, an ultra-responsive Indian government scheme voice advisor with a structured 2-step eligibility guidance workflow. You understand both Hindi and English voice commands fluently.
+
+${voiceLanguageRule}
 
 WORKFLOW RULES:
-1. STAGE "chat" — Pure greetings or mic checks (e.g. "Can you hear me right now?", "Hello"):
+1. STAGE "chat" — Pure greetings or mic checks (e.g. "Can you hear me right now?", "Hello", "नमस्ते", "क्या आप मुझे सुन सकते हैं?"):
    - Reply warmly in 1 short sentence, stage: "chat", matchedSchemeIds: [], liveSchemes: [], eligibilityQuestions: [].
 
-2. STAGE "ask_eligibility" — Whenever the user asks to discover/list government schemes for a topic (e.g., "Tell me the government schemes for startup grants", "scholarships for students", "farmer subsidies", "women business loans") AND has NOT yet answered the eligibility questions:
+2. STAGE "ask_eligibility" — Whenever the user asks (in English, Hindi, or Hinglish) to discover/list government schemes for a topic (e.g., "Tell me the government schemes for startup grants", "स्टार्टअप ग्रांट के लिए सरकारी योजनाएं बताइए", "किसानों के लिए योजना", "छात्रवृत्ति योजना") AND has NOT yet answered the eligibility questions:
    - Set stage: "ask_eligibility".
    - Show ALL relevant Indian government schemes for that topic:
      * Include all matching exact catalog IDs in matchedSchemeIds.
      * ALSO include up to 3 well-known real Indian government schemes/grants not in the catalog via liveSchemes (for example, for startup grants, in addition to Startup India Seed Fund Scheme from the catalog, include real Indian grants like DST NIDHI-PRAYAS Grant, MeitY SAMRIDH Scheme, and BIRAC Biotechnology Ignition Grant with full eligibility[], application_process[], benefits[], documents_required[], and official .gov.in URLs).
-   - Generate 3 to 4 crisp, direct, scheme-specific questions in "eligibilityQuestions" derived directly from the eligibility rules of those matched schemes (each with 2 to 4 short clickable options), phrased so the user can easily answer by voice OR tap.
-   - In "spokenSummary" (2 to 3 crisp sentences, under 42 words, plain speech with NO markdown/URLs), briefly state the matching schemes found and ask the user the key eligibility questions naturally so they can answer right away to see full eligibility details.
+   - Generate 3 to 4 crisp, direct, scheme-specific questions in "eligibilityQuestions" derived directly from the eligibility rules of those matched schemes (each with 2 to 4 short clickable options in English), phrased so the user can easily answer by voice OR form.
+   - In "spokenSummary" (in the required voice language above), briefly state the matching schemes found and ask the user the key eligibility questions naturally so they can answer right away to unlock full eligibility details.
 
-3. STAGE "show_details" — Whenever the user answers the eligibility questions (either via voice reply to pending questions OR via Structured Eligibility Answers) OR explicitly asks to proceed directly with scheme details/application steps:
+3. STAGE "show_details" — Whenever the user answers the eligibility questions (either via Hindi/English voice reply to pending questions OR via Structured Eligibility Answers) OR explicitly asks to proceed directly with scheme details/application steps:
    - Set stage: "show_details".
    - Keep/return all relevant matched schemes (matching catalog IDs and/or preserving the schemes currently under eligibility check).
    - Provide "eligibilityAssessments" for EACH matched scheme evaluating the user's answers (status: 'eligible' | 'partially_eligible' | 'not_eligible', concise summary, and checks[] showing each key criterion as 'yes' | 'no' | 'check').
    - Set eligibilityQuestions: [].
-   - In "spokenSummary" (2 to 3 crisp sentences, under 42 words, plain speech), tell the user which schemes they are eligible for and let them know the complete eligibility criteria, documents, and application steps are now displayed on screen.
+   - In "spokenSummary" (in the required voice language above), tell the user which schemes they are eligible for and let them know the complete eligibility criteria, documents, and application steps are now displayed on screen.
 
-4. Never invent catalog IDs. If the user asks about a brand-new scheme category while previous questions were pending, switch cleanly to stage "ask_eligibility" for the new category. Match the user's language (English, Hindi, or Hinglish).`,
+4. Never invent catalog IDs. If the user asks about a brand-new scheme category while previous questions were pending, switch cleanly to stage "ask_eligibility" for the new category.`,
       prompt,
       responseSchema: agentResponseSchema,
     });
@@ -714,7 +728,7 @@ WORKFLOW RULES:
 };
 
 export const aiTranscribeController = async (req, res) => {
-  const { audioBase64, mimeType = "audio/webm" } = req.body || {};
+  const { audioBase64, mimeType = "audio/webm", voiceLanguage = "en" } = req.body || {};
 
   if (!audioBase64 || typeof audioBase64 !== "string") {
     return res.status(400).json({
@@ -722,6 +736,8 @@ export const aiTranscribeController = async (req, res) => {
       message: "Audio data is required for transcription.",
     });
   }
+
+  const isHindi = voiceLanguage === "hi";
 
   try {
     const ai = getGeminiClient();
@@ -736,12 +752,15 @@ export const aiTranscribeController = async (req, res) => {
     const transcribeModels = [
       {
         model: "gemini-3.5-transcribe",
-        instruction: "Transcribe speech accurately as plain text. Return only the spoken words.",
+        instruction: isHindi
+          ? "Transcribe this Hindi or Hinglish speech accurately as plain text. Return only the spoken words."
+          : "Transcribe speech accurately in English or Hindi as plain text. Return only the spoken words.",
       },
       {
         model: "gemini-3.1-flash-lite",
-        instruction:
-          "Write out exactly what the speaker said as plain text (English, Hindi, or Hinglish). Return ONLY the spoken words or empty string if silent.",
+        instruction: isHindi
+          ? "Listen carefully and write out exactly what the speaker said in Hindi (Devanagari or Hinglish) as plain text. Return ONLY the spoken words or empty string if silent."
+          : "Write out exactly what the speaker said as plain text (English, Hindi, or Hinglish). Return ONLY the spoken words or empty string if silent.",
       },
     ];
 

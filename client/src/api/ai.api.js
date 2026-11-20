@@ -26,6 +26,7 @@ export const askSchemeAgent = async (
   {
     includeAudio = false,
     voiceName = 'Zephyr',
+    voiceLanguage = 'en',
     activeSchemes = [],
     pendingQuestions = [],
     eligibilityAnswers = null,
@@ -36,6 +37,7 @@ export const askSchemeAgent = async (
     history,
     includeAudio,
     voiceName,
+    voiceLanguage,
     activeSchemes,
     pendingQuestions,
     eligibilityAnswers,
@@ -43,8 +45,8 @@ export const askSchemeAgent = async (
   return response.data;
 };
 
-export const transcribeVoice = async (audioBase64, mimeType = 'audio/webm') => {
-  const response = await api.post('/api/ai/transcribe', { audioBase64, mimeType });
+export const transcribeVoice = async (audioBase64, mimeType = 'audio/webm', voiceLanguage = 'en') => {
+  const response = await api.post('/api/ai/transcribe', { audioBase64, mimeType, voiceLanguage });
   return response.data;
 };
 
