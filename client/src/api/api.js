@@ -6,6 +6,28 @@ export const setAuthTokenProvider = (provider) => {
   authTokenProvider = provider;
 };
 
+export const getAuthHeaders = async () => {
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-api-key': import.meta.env.VITE_API_KEY || 'GovtCompass-Secret-Key-2026',
+  };
+  const sessionId = localStorage.getItem('sessionId');
+  if (sessionId) {
+    headers['X-Session-ID'] = sessionId;
+  }
+  if (authTokenProvider) {
+    try {
+      const token = await authTokenProvider();
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+    } catch {
+      // ignore token errors
+    }
+  }
+  return headers;
+};
+
 export const api = axios.create({
   // Always use same-origin relative /api/* paths served by our Express server
   baseURL: '',

@@ -34,3 +34,24 @@ export function unlockSharedAudioContext() {
     return null;
   }
 }
+
+/**
+ * Safely tries to resume the shared AudioContext with a strict timeout.
+ * Prevents Chrome's indefinite hang when resume() is called without an active user gesture.
+ */
+export async function ensureAudioContextRunning(timeoutMs = 150) {
+  const ctx = getSharedAudioContext();
+  if (!ctx) return null;
+  if (ctx.state === 'running') return ctx;
+
+  try {
+    await Promise.race([
+      ctx.resume().catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+    ]);
+  } catch {
+    // ignore
+  }
+
+  return ctx.state === 'running' ? ctx : null;
+}

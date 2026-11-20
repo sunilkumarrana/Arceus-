@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { unlockSharedAudioContext } from '../utils/audioUnlock';
+import { prefetchGreetingAudio } from '../utils/greetingPrefetch';
 
 export function AuthStatusButton({ dark = false }) {
   const { user, authLoading, signInWithGoogle, logout } = useAuth();
@@ -21,9 +22,9 @@ export function AuthStatusButton({ dark = false }) {
 
   if (user) {
     return (
-      <div className="flex items-center space-x-3">
+      <div className="flex items-center gap-2.5 shrink-0">
         <span
-          className={`hidden sm:inline text-xs font-mono truncate max-w-[160px] ${
+          className={`hidden xl:inline text-xs font-mono truncate max-w-[140px] ${
             dark ? 'text-[var(--text-muted-on-dark)]' : 'text-[var(--text-muted)]'
           }`}
           title={user.email || user.displayName || ''}
@@ -32,7 +33,7 @@ export function AuthStatusButton({ dark = false }) {
         </span>
         <button
           onClick={logout}
-          className={`text-xs font-bold font-mono uppercase tracking-wider px-3 py-1.5 rounded-lg border transition-colors ${
+          className={`whitespace-nowrap shrink-0 text-xs font-bold font-mono uppercase tracking-wider px-3 py-1.5 rounded-lg border transition-colors ${
             dark
               ? 'border-white/20 text-[var(--text-on-dark)] hover:border-[var(--gold)] hover:text-[var(--gold)]'
               : 'border-black/15 text-[var(--text)] hover:bg-black/5'
@@ -48,7 +49,7 @@ export function AuthStatusButton({ dark = false }) {
     <button
       onClick={handleSignIn}
       disabled={busy}
-      className={`text-xs font-bold font-mono uppercase tracking-wider px-3.5 py-1.5 rounded-lg border transition-colors disabled:opacity-50 ${
+      className={`whitespace-nowrap shrink-0 text-xs font-bold font-mono uppercase tracking-wider px-3.5 py-1.5 rounded-lg border transition-colors disabled:opacity-50 ${
         dark
           ? 'border-[var(--gold)]/60 text-[var(--gold)] hover:bg-[var(--gold)] hover:text-black'
           : 'border-black/15 bg-white text-[var(--text)] hover:border-[var(--gold)]'
@@ -82,6 +83,7 @@ export function AuthGate({ children, title = 'Sign in to continue', subtitle = '
     setSigningIn(true);
     try {
       await signInWithGoogle();
+      prefetchGreetingAudio();
     } catch {
       // handled in AuthContext
     } finally {

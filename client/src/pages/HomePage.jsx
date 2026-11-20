@@ -4,6 +4,7 @@ import { getRecommendationsFromProfile } from "../api/recommendation.api";
 import { explainScheme, analyzeEligibilityGap } from "../api/ai.api";
 import { AuthStatusButton } from "../components/AuthGate";
 import { unlockSharedAudioContext } from "../utils/audioUnlock";
+import { prefetchGreetingAudio } from "../utils/greetingPrefetch";
 
 
 
@@ -278,41 +279,56 @@ export default function HomePage() {
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] font-sans flex flex-col">
       {/* 1. STICKY NAV BAND */}
       <header className="sticky top-0 z-50 bg-[var(--bg)] text-[var(--text)] border-b border-black/5 shadow-sm">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex flex-wrap justify-between items-center gap-4 relative">
-          <div className="flex items-center space-x-3 select-none z-10">
-            <span className="text-2xl font-bold tracking-tight font-display leading-none">Govt Compass</span>
-            <span className="hidden sm:inline-block px-2.5 py-0.5 text-[10px] font-mono bg-[var(--gold)] text-black rounded font-bold uppercase tracking-widest translate-y-px">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex items-center justify-between gap-4 lg:gap-6">
+          <div className="flex items-center gap-2.5 select-none shrink-0">
+            <span className="text-xl sm:text-2xl font-bold tracking-tight font-display leading-none whitespace-nowrap">
+              Govt Compass
+            </span>
+            <span className="hidden sm:inline-block px-2 py-0.5 text-[10px] font-mono bg-[var(--gold)] text-black rounded font-bold uppercase tracking-widest">
               BETA
             </span>
           </div>
 
-          {/* Centered Desktop Navigation */}
-          <nav className="hidden md:flex absolute left-1/2 -translate-x-1/2 items-center space-x-8 text-sm font-semibold text-[var(--text-muted)] z-0">
-            <button onClick={() => handleScroll(infoRef)} className="hover:text-[var(--text)] transition-colors duration-200">
+          {/* Centered Desktop Navigation (normal flex flow — never overlaps siblings) */}
+          <nav className="hidden lg:flex items-center gap-6 text-sm font-semibold text-[var(--text-muted)] shrink-0">
+            <button
+              onClick={() => handleScroll(infoRef)}
+              className="whitespace-nowrap hover:text-[var(--text)] transition-colors duration-200"
+            >
               Methodology
             </button>
-            <button onClick={() => handleScroll(privacyRef)} className="hover:text-[var(--text)] transition-colors duration-200">
+            <button
+              onClick={() => handleScroll(privacyRef)}
+              className="whitespace-nowrap hover:text-[var(--text)] transition-colors duration-200"
+            >
               Privacy
             </button>
-            <a href="https://github.com/sunilkumarrana/Arceus-" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--text)] transition-colors duration-200">
+            <a
+              href="https://github.com/sunilkumarrana/Arceus-"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="whitespace-nowrap hover:text-[var(--text)] transition-colors duration-200"
+            >
               GitHub
             </a>
           </nav>
 
           {/* Header Action Buttons */}
-          <div className="flex items-center space-x-4 z-10">
-            <button 
+          <div className="flex items-center gap-3 sm:gap-4 shrink-0">
+            <button
               onClick={() => navigate('/schemes')}
-              className="hidden md:block text-sm font-bold text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
+              className="hidden md:inline-block whitespace-nowrap text-sm font-bold text-[var(--text-muted)] hover:text-[var(--text)] transition-colors"
             >
               Explore Schemes
             </button>
             <button
+              onMouseEnter={() => prefetchGreetingAudio()}
               onClick={() => {
                 unlockSharedAudioContext();
+                prefetchGreetingAudio();
                 navigate('/agent', { state: { autoGreet: true } });
               }}
-              className="bg-[var(--text)] text-[var(--bg)] px-5 py-1.5 rounded-lg text-xs font-bold font-mono tracking-wider hover:opacity-80 hover:-translate-y-[1px] active:translate-y-[1px] transition-all duration-150"
+              className="whitespace-nowrap bg-[var(--text)] text-[var(--bg)] px-4 sm:px-5 py-1.5 rounded-lg text-xs font-bold font-mono tracking-wider hover:opacity-80 hover:-translate-y-[1px] active:translate-y-[1px] transition-all duration-150"
             >
               Find Schemes
             </button>
@@ -336,9 +352,13 @@ export default function HomePage() {
               <button
                 onClick={() => {
                   unlockSharedAudioContext();
+                  prefetchGreetingAudio();
                   navigate('/agent', { state: { autoGreet: true } });
                 }}
-                onMouseEnter={handleMouse}
+                onMouseEnter={(e) => {
+                  handleMouse(e);
+                  prefetchGreetingAudio();
+                }}
                 onMouseLeave={handleMouse}
                 className="
                   group relative overflow-hidden

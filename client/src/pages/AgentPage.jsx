@@ -2,11 +2,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { askSchemeAgent, transcribeVoice, speakAgentText } from '../api/ai.api';
 import { AuthGate, AuthStatusButton } from '../components/AuthGate';
-import { getSharedAudioContext, unlockSharedAudioContext } from '../utils/audioUnlock';
-
-const GREETING_TEXT = 'Hello sir, how can I help you with?';
-
-const VOICE_STORAGE_KEY = 'govtcompass_advisor_voice';
+import { ensureAudioContextRunning, unlockSharedAudioContext } from '../utils/audioUnlock';
+import {
+  GREETING_TEXT,
+  VOICE_STORAGE_KEY,
+  getSavedAdvisorVoice,
+  getCachedGreetingAudio,
+  prefetchGreetingAudio,
+} from '../utils/greetingPrefetch';
 
 const VOICE_OPTIONS = [
   { id: 'Zephyr', label: 'Zephyr (Warm & Clear)' },
@@ -25,15 +28,7 @@ const BROWSER_VOICE_PROFILES = {
 };
 
 function loadSavedVoice() {
-  try {
-    const saved = localStorage.getItem(VOICE_STORAGE_KEY);
-    if (saved && VOICE_OPTIONS.some((v) => v.id === saved)) {
-      return saved;
-    }
-  } catch {
-    // ignore
-  }
-  return 'Zephyr';
+  return getSavedAdvisorVoice();
 }
 
 function SkyCloudOrb({ status = 'idle', compact = false, voiceLevel = 0, onClick }) {
@@ -153,6 +148,238 @@ function VoiceEqualizer({ active }) {
   );
 }
 
+function SchemeOverviewCard({ scheme, onProceedSingle }) {
+  const topBenefit = Array.isArray(scheme.benefits) && scheme.benefits[0] ? scheme.benefits[0] : null;
+
+  return (
+    <article className="bg-white border border-black/10 rounded-2xl p-4 sm:p-5 shadow-[0_3px_14px_rgba(0,0,0,0.03)] flex flex-col justify-between gap-3">
+      <div className="space-y-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {scheme.level && (
+            <span className="px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider rounded bg-[#EFF6FF] text-[#2563EB] border border-[#BFDBFE]">
+              {scheme.level}
+            </span>
+          )}
+          {scheme.state && (
+            <span className="px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wider rounded bg-neutral-100 text-neutral-700">
+              {scheme.state}
+            </span>
+          )}
+        </div>
+
+        <h3 className="text-base font-display font-bold text-neutral-900 leading-snug">
+          {scheme.scheme_name}
+        </h3>
+        {scheme.ministry && (
+          <p className="text-[11px] text-neutral-500 font-medium">{scheme.ministry}</p>
+        )}
+        {scheme.brief_description && (
+          <p className="text-xs sm:text-sm text-neutral-700 leading-relaxed pt-0.5">
+            {scheme.brief_description}
+          </p>
+        )}
+        {topBenefit && (
+          <p className="text-xs text-emerald-700 bg-emerald-50/70 border border-emerald-200/70 rounded-lg px-2.5 py-1.5 mt-2">
+            <span className="font-semibold">Key Benefit:</span> {topBenefit}
+          </p>
+        )}
+      </div>
+
+      <div className="pt-2 border-t border-black/5 flex items-center justify-end">
+        <button
+          type="button"
+          onClick={() => onProceedSingle(scheme)}
+          className="text-xs font-semibold text-[#2563EB] hover:text-[#1D4ED8] transition"
+        >
+          Proceed to Details & Eligibility →
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function EligibilityFormModal({
+  schemeCount,
+  questions,
+  answers,
+  extraNote,
+  onExtraNoteChange,
+  onSelectAnswer,
+  onSubmit,
+  onSkipToDetails,
+  agentStatus,
+  onVoiceTap,
+  disabled,
+}) {
+  if (!Array.isArray(questions) || questions.length === 0) return null;
+  const answeredCount = Object.keys(answers).length;
+  const isListening = agentStatus === 'listening';
+  const isSpeaking = agentStatus === 'speaking';
+
+  const handleFormSubmit = (e) => {
+    e.preventDefault();
+    if (disabled || (answeredCount === 0 && !extraNote.trim())) return;
+    onSubmit();
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center px-4 pt-16 pb-24 bg-[#FCFCFD]/55 backdrop-blur-[3px] animate-fade-in-up"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="eligibility-form-title"
+    >
+      <form
+        onSubmit={handleFormSubmit}
+        className="w-full max-w-xl max-h-full flex flex-col bg-white border border-black/10 rounded-2xl shadow-[0_24px_65px_-12px_rgba(15,23,42,0.22)] overflow-hidden"
+      >
+        {/* Form Header */}
+        <div className="px-5 sm:px-6 pt-5 pb-4 border-b border-black/5 bg-[#F8FAFF] flex items-start justify-between gap-3 shrink-0">
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-widest rounded bg-[#EFF6FF] text-[#2563EB] border border-[#BFDBFE]">
+                Eligibility Form
+              </span>
+              <span className="text-[11px] font-mono font-semibold text-neutral-500">
+                {schemeCount} {schemeCount === 1 ? 'Scheme' : 'Schemes'} Found
+              </span>
+            </div>
+            <h3
+              id="eligibility-form-title"
+              className="text-base sm:text-lg font-display font-bold text-neutral-900 leading-snug"
+            >
+              Check Your Eligibility to Unlock Full Details
+            </h3>
+            <p className="text-xs text-neutral-600 leading-relaxed">
+              Fill out the quick form below or answer by voice to view matching eligibility criteria & application steps.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onVoiceTap}
+            disabled={disabled}
+            title={isListening ? 'Listening — tap to send' : 'Answer by voice'}
+            className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition ${
+              isListening
+                ? 'bg-[#2563EB] text-white border-[#2563EB] shadow-sm'
+                : isSpeaking
+                  ? 'bg-[#EFF6FF] text-[#2563EB] border-[#BFDBFE]'
+                  : 'bg-white text-neutral-700 border-black/10 hover:border-[#2563EB]/50 hover:text-[#2563EB]'
+            }`}
+          >
+            <span
+              className={`w-2 h-2 rounded-full ${
+                isListening
+                  ? 'bg-white animate-ping'
+                  : isSpeaking
+                    ? 'bg-[#2563EB] animate-pulse'
+                    : 'bg-[#2563EB]'
+              }`}
+            />
+            <span>{isListening ? 'Listening' : isSpeaking ? 'Speaking' : 'Speak'}</span>
+          </button>
+        </div>
+
+        {/* Scrollable Form Fields */}
+        <div className="flex-1 overflow-y-auto px-5 sm:px-6 py-4 space-y-4">
+          {questions.map((q, idx) => {
+            const selected = answers[q.id];
+            return (
+              <fieldset
+                key={q.id || idx}
+                className="border border-black/8 rounded-xl p-3.5 sm:p-4 bg-[#FCFCFD] space-y-2.5"
+              >
+                <legend className="text-xs sm:text-sm font-semibold text-neutral-900 leading-snug px-1">
+                  <span className="text-[#2563EB] font-mono mr-1.5">{idx + 1}.</span>
+                  {q.question}
+                </legend>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                  {(q.options || ['Yes', 'No']).map((opt) => {
+                    const isActive = selected === opt;
+                    return (
+                      <label
+                        key={opt}
+                        className={`flex items-center gap-2.5 px-3 py-2 rounded-xl border text-xs font-medium cursor-pointer transition select-none ${
+                          isActive
+                            ? 'bg-[#EFF6FF] border-[#2563EB] text-[#1D4ED8] shadow-[0_1px_4px_rgba(37,99,235,0.12)]'
+                            : 'bg-white border-black/10 text-neutral-800 hover:border-[#2563EB]/40 hover:bg-neutral-50'
+                        } ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
+                      >
+                        <input
+                          type="radio"
+                          name={q.id || `q-${idx}`}
+                          value={opt}
+                          checked={isActive}
+                          disabled={disabled}
+                          onChange={() => onSelectAnswer(q.id, opt)}
+                          className="sr-only"
+                        />
+                        <span
+                          className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 transition ${
+                            isActive ? 'border-[#2563EB] bg-[#2563EB]' : 'border-neutral-300 bg-white'
+                          }`}
+                        >
+                          {isActive && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                        </span>
+                        <span className="leading-tight">{opt}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            );
+          })}
+
+          {/* Optional Free-Text Details Field */}
+          <div className="space-y-1.5 pt-1">
+            <label
+              htmlFor="eligibility-extra-note"
+              className="block text-xs font-semibold text-neutral-700"
+            >
+              Additional Details <span className="font-normal text-neutral-400">(Optional)</span>
+            </label>
+            <input
+              id="eligibility-extra-note"
+              type="text"
+              value={extraNote}
+              disabled={disabled}
+              onChange={(e) => onExtraNoteChange(e.target.value)}
+              placeholder="e.g., State, startup sector, age, or annual income..."
+              className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-black/10 text-xs sm:text-sm text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/15 transition"
+            />
+          </div>
+        </div>
+
+        {/* Form Footer */}
+        <div className="px-5 sm:px-6 py-3.5 border-t border-black/5 bg-neutral-50/80 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center justify-between sm:justify-start gap-3">
+            <span className="text-[11px] font-mono text-neutral-500">
+              {answeredCount}/{questions.length} answered
+            </span>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={onSkipToDetails}
+              className="text-xs font-semibold text-neutral-600 hover:text-neutral-900 transition"
+            >
+              Skip & View Schemes
+            </button>
+          </div>
+
+          <button
+            type="submit"
+            disabled={disabled || (answeredCount === 0 && !extraNote.trim())}
+            className="px-5 py-2.5 rounded-xl bg-[#2563EB] text-white text-xs sm:text-sm font-semibold hover:bg-[#1D4ED8] transition disabled:opacity-45 disabled:cursor-not-allowed shadow-sm"
+          >
+            {disabled ? 'Checking Eligibility...' : 'Submit & View Scheme Details →'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function SchemeDetailCard({ scheme, onOpenFull }) {
   const eligibility = Array.isArray(scheme.eligibility) ? scheme.eligibility : [];
   const applicationProcess = Array.isArray(scheme.application_process)
@@ -161,6 +388,27 @@ function SchemeDetailCard({ scheme, onOpenFull }) {
   const benefits = Array.isArray(scheme.benefits) ? scheme.benefits : [];
   const documents = Array.isArray(scheme.documents_required) ? scheme.documents_required : [];
   const officialLink = Array.isArray(scheme.references) && scheme.references[0] ? scheme.references[0] : null;
+  const assessment = scheme.eligibilityAssessment || null;
+
+  const statusMeta = assessment
+    ? {
+        eligible: {
+          label: 'Eligible',
+          badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+          bannerClass: 'bg-emerald-50/70 border-emerald-200 text-emerald-900',
+        },
+        partially_eligible: {
+          label: 'Partially Eligible',
+          badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+          bannerClass: 'bg-amber-50/70 border-amber-200 text-amber-900',
+        },
+        not_eligible: {
+          label: 'Check Criteria',
+          badgeClass: 'bg-rose-50 text-rose-700 border-rose-200',
+          bannerClass: 'bg-rose-50/70 border-rose-200 text-rose-900',
+        },
+      }[assessment.status] || null
+    : null;
 
   return (
     <article className="bg-white border border-black/10 rounded-2xl p-5 sm:p-6 shadow-[0_4px_20px_rgba(0,0,0,0.04)] space-y-5">
@@ -168,6 +416,13 @@ function SchemeDetailCard({ scheme, onOpenFull }) {
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 border-b border-black/5 pb-4">
         <div className="space-y-1.5">
           <div className="flex flex-wrap items-center gap-1.5">
+            {statusMeta && (
+              <span
+                className={`px-2.5 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider rounded border ${statusMeta.badgeClass}`}
+              >
+                {statusMeta.label}
+              </span>
+            )}
             {scheme.level && (
               <span className="px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider rounded bg-[#EFF6FF] text-[#2563EB] border border-[#BFDBFE]">
                 {scheme.level}
@@ -221,12 +476,41 @@ function SchemeDetailCard({ scheme, onOpenFull }) {
         </div>
       </div>
 
-      {/* Primary Two-Column Details: Eligibility & Application Process (Always Visible!) */}
+      {/* Personalized Eligibility Assessment Summary */}
+      {assessment?.summary && statusMeta && (
+        <div className={`border rounded-xl px-4 py-3 text-xs sm:text-sm font-medium ${statusMeta.bannerClass}`}>
+          {assessment.summary}
+        </div>
+      )}
+
+      {/* Primary Two-Column Details: Eligibility Criteria & Application Details (Displayed When Proceeding!) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-[#F8FAFF] border border-[#DBEAFE] rounded-xl p-4">
-          <h4 className="text-xs font-mono font-bold uppercase tracking-wider text-[#2563EB] mb-2.5">
+        <div className="bg-[#F8FAFF] border border-[#DBEAFE] rounded-xl p-4 space-y-3">
+          <h4 className="text-xs font-mono font-bold uppercase tracking-wider text-[#2563EB]">
             Eligibility Criteria
           </h4>
+
+          {Array.isArray(assessment?.checks) && assessment.checks.length > 0 && (
+            <ul className="space-y-1.5 text-xs sm:text-sm text-neutral-800 pb-2 border-b border-[#DBEAFE]">
+              {assessment.checks.map((chk, idx) => (
+                <li key={`chk-${idx}`} className="flex items-start gap-2">
+                  <span
+                    className={`font-mono font-bold shrink-0 ${
+                      chk.met === 'yes'
+                        ? 'text-emerald-600'
+                        : chk.met === 'no'
+                          ? 'text-rose-600'
+                          : 'text-amber-600'
+                    }`}
+                  >
+                    {chk.met === 'yes' ? '✓' : chk.met === 'no' ? '✕' : '!'}
+                  </span>
+                  <span>{chk.criterion}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+
           {eligibility.length > 0 ? (
             <ul className="space-y-2 text-xs sm:text-sm text-neutral-800 leading-relaxed">
               {eligibility.map((item, idx) => (
@@ -333,8 +617,13 @@ function getSpeechRecognitionCtor() {
 function AgentWorkspace() {
   const navigate = useNavigate();
 
-  // Pure voice state: no user text bubbles are rendered; only matched schemes, live sources & spoken audio state
+  // Pure voice + 2-stage scheme guidance state (zero user text bubbles)
   const [matchedSchemes, setMatchedSchemes] = useState([]);
+  const [schemeStage, setSchemeStage] = useState('chat'); // 'chat' | 'ask_eligibility' | 'show_details'
+  const [eligibilityQuestions, setEligibilityQuestions] = useState([]);
+  const [eligibilityAnswers, setEligibilityAnswers] = useState({});
+  const [eligibilityExtraNote, setEligibilityExtraNote] = useState('');
+  const [focusedSchemeId, setFocusedSchemeId] = useState(null);
   const [liveSources, setLiveSources] = useState([]);
   const [latestSpokenReply, setLatestSpokenReply] = useState(null); // { id, text, audioBase64, audioMimeType, audioVoice }
   const [agentStatus, setAgentStatus] = useState('idle'); // 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking'
@@ -353,9 +642,19 @@ function AgentWorkspace() {
 
   const selectedVoiceRef = useRef(selectedVoice);
   const autoSpeakRef = useRef(autoSpeak);
+  const matchedSchemesRef = useRef([]);
+  const eligibilityQuestionsRef = useRef([]);
 
   // In-memory conversation history for multi-turn context (never rendered as text bubbles)
   const historyRef = useRef([]);
+
+  useEffect(() => {
+    matchedSchemesRef.current = matchedSchemes;
+  }, [matchedSchemes]);
+
+  useEffect(() => {
+    eligibilityQuestionsRef.current = eligibilityQuestions;
+  }, [eligibilityQuestions]);
 
   useEffect(() => {
     selectedVoiceRef.current = selectedVoice;
@@ -389,37 +688,47 @@ function AgentWorkspace() {
   const audioSourceRef = useRef(null);
   const htmlAudioRef = useRef(null);
   const htmlAudioUrlRef = useRef(null);
+  const utteranceRef = useRef(null);
   const playbackSessionRef = useRef(0);
   const mountedRef = useRef(true);
   const greetedRef = useRef(false);
 
   const hasSchemes = matchedSchemes.length > 0;
 
-  // Preload browser speech voices & greet the user immediately upon entering Find Schemes
+  // Preload browser speech voices & play prefetched greeting immediately upon entering Find Schemes
   useEffect(() => {
     mountedRef.current = true;
+    let cancelled = false;
+
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.getVoices();
     }
 
     if (!greetedRef.current) {
-      greetedRef.current = true;
-      const timer = setTimeout(async () => {
-        if (!mountedRef.current) return;
+      (async () => {
+        const activeVoice = selectedVoiceRef.current || 'Zephyr';
+        const cached = getCachedGreetingAudio(activeVoice) || (await prefetchGreetingAudio(activeVoice));
+        if (cancelled || !mountedRef.current || greetedRef.current) return;
+
+        greetedRef.current = true;
         const spoke = await playSpokenReply({
           text: GREETING_TEXT,
-          voiceName: selectedVoiceRef.current,
+          audioBase64: cached?.audioBase64 || null,
+          audioMimeType: cached?.audioMimeType || 'audio/wav',
+          audioVoice: cached?.audioVoice || activeVoice,
+          voiceName: activeVoice,
           msgId: 'initial-greeting',
           silentIfBlocked: true,
         });
-        // After finishing the greeting cleanly, automatically start listening hands-free
-        if (mountedRef.current && spoke) {
+        if (!cancelled && mountedRef.current && spoke) {
           startListening({ silentOnNoSpeech: true });
         }
-      }, 60);
-      return () => clearTimeout(timer);
+      })();
     }
-    return undefined;
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Cleanup everything on unmount
@@ -582,9 +891,12 @@ function AgentWorkspace() {
         }
 
         let settled = false;
+        let safetyTimer = null;
         const finish = (ok) => {
           if (settled) return;
           settled = true;
+          if (safetyTimer) clearTimeout(safetyTimer);
+          utteranceRef.current = null;
           if (playbackSessionRef.current === sessionToken) {
             setSpeakingMessageId(null);
             setAgentStatus('idle');
@@ -595,9 +907,27 @@ function AgentWorkspace() {
         utterance.onend = () => finish(true);
         utterance.onerror = () => finish(false);
 
+        // Keep strong ref to prevent Chrome GC from prematurely terminating speech
+        utteranceRef.current = utterance;
         setSpeakingMessageId(msgId);
         setAgentStatus('speaking');
-        window.speechSynthesis.speak(utterance);
+
+        // Small tick after cancel() prevents Chrome from silently dropping the utterance
+        setTimeout(() => {
+          if (settled || playbackSessionRef.current !== sessionToken) {
+            finish(false);
+            return;
+          }
+          try {
+            if (window.speechSynthesis.paused) {
+              window.speechSynthesis.resume();
+            }
+            window.speechSynthesis.speak(utterance);
+            safetyTimer = setTimeout(() => finish(true), Math.max(8000, text.length * 110));
+          } catch {
+            finish(false);
+          }
+        }, 35);
       } catch {
         resolve(false);
       }
@@ -607,36 +937,37 @@ function AgentWorkspace() {
   const playAudioBase64 = async (audioBase64, mimeType, msgId, sessionToken) => {
     const bytes = base64ToUint8Array(audioBase64);
 
-    // Tier 1: Shared unlocked Web Audio API
+    // Tier 1: Shared unlocked Web Audio API (with non-hanging 150ms resume check)
     try {
-      const ctx = getSharedAudioContext();
+      const ctx = await ensureAudioContextRunning(150);
+      if (playbackSessionRef.current !== sessionToken) return false;
       if (ctx) {
-        if (ctx.state === 'suspended') {
-          await ctx.resume();
-        }
-        if (ctx.state === 'running') {
-          const audioBuffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
-          if (playbackSessionRef.current !== sessionToken) return false;
+        const audioBuffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
+        if (playbackSessionRef.current !== sessionToken) return false;
 
-          const source = ctx.createBufferSource();
-          source.buffer = audioBuffer;
-          source.connect(ctx.destination);
-          audioSourceRef.current = source;
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(ctx.destination);
+        audioSourceRef.current = source;
 
-          return await new Promise((resolve) => {
-            source.onended = () => {
-              if (playbackSessionRef.current === sessionToken) {
-                audioSourceRef.current = null;
-                setSpeakingMessageId(null);
-                setAgentStatus('idle');
-              }
-              resolve(true);
-            };
-            setSpeakingMessageId(msgId);
-            setAgentStatus('speaking');
-            source.start(0);
-          });
-        }
+        return await new Promise((resolve) => {
+          let settled = false;
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            if (playbackSessionRef.current === sessionToken) {
+              audioSourceRef.current = null;
+              setSpeakingMessageId(null);
+              setAgentStatus('idle');
+            }
+            resolve(true);
+          };
+          source.onended = finish;
+          setSpeakingMessageId(msgId);
+          setAgentStatus('speaking');
+          source.start(0);
+          setTimeout(finish, Math.ceil(audioBuffer.duration * 1000) + 400);
+        });
       }
     } catch (webAudioErr) {
       console.warn('Web Audio API playback fallback triggered:', webAudioErr);
@@ -644,7 +975,7 @@ function AgentWorkspace() {
 
     if (playbackSessionRef.current !== sessionToken) return false;
 
-    // Tier 2: Blob URL HTMLAudioElement
+    // Tier 2: Blob URL HTMLAudioElement (works reliably across browsers even if AudioContext was suspended)
     try {
       const blob = new Blob([bytes], { type: mimeType || 'audio/wav' });
       const blobUrl = URL.createObjectURL(blob);
@@ -654,7 +985,10 @@ function AgentWorkspace() {
       htmlAudioRef.current = audio;
 
       return await new Promise((resolve) => {
-        audio.onended = () => {
+        let settled = false;
+        const cleanup = (ok) => {
+          if (settled) return;
+          settled = true;
           if (playbackSessionRef.current === sessionToken) {
             setSpeakingMessageId(null);
             setAgentStatus('idle');
@@ -664,23 +998,15 @@ function AgentWorkspace() {
             htmlAudioUrlRef.current = null;
           }
           htmlAudioRef.current = null;
-          resolve(true);
+          resolve(ok);
         };
 
-        audio.onerror = () => {
-          if (htmlAudioUrlRef.current === blobUrl) {
-            URL.revokeObjectURL(blobUrl);
-            htmlAudioUrlRef.current = null;
-          }
-          htmlAudioRef.current = null;
-          resolve(false);
-        };
+        audio.onended = () => cleanup(true);
+        audio.onerror = () => cleanup(false);
 
         setSpeakingMessageId(msgId);
         setAgentStatus('speaking');
-        audio.play().catch(() => {
-          resolve(false);
-        });
+        audio.play().catch(() => cleanup(false));
       });
     } catch (htmlAudioErr) {
       console.warn('HTMLAudioElement playback failed:', htmlAudioErr);
@@ -709,6 +1035,7 @@ function AgentWorkspace() {
       let base64 = audioBase64 && audioVoice === activeVoice ? audioBase64 : null;
       let mime = audioMimeType || 'audio/wav';
 
+      // Fetch verified Gemini WAV audio if not already prefetched/cached
       if (!base64 && text) {
         try {
           const res = await speakAgentText(text, activeVoice);
@@ -748,7 +1075,7 @@ function AgentWorkspace() {
         setSpeakingMessageId(null);
         setAgentStatus('idle');
         if (!silentIfBlocked) {
-          setError('Audio playback was paused by your browser. Tap "Replay Voice" to listen.');
+          setError('Audio playback was paused by your browser. Tap "Replay Voice Answer" to listen.');
         }
       }
       return false;
@@ -762,7 +1089,7 @@ function AgentWorkspace() {
     }
   };
 
-  const sendSpokenQuestion = async (rawText) => {
+  const sendSpokenQuestion = async (rawText, structuredAnswers = null) => {
     const trimmed = String(rawText || '').trim();
     if (!trimmed) return;
 
@@ -772,13 +1099,18 @@ function AgentWorkspace() {
     setAgentStatus('thinking');
 
     const currentVoice = selectedVoiceRef.current || 'Zephyr';
-    const shouldSpeak = autoSpeakRef.current;
     const historyForApi = historyRef.current.slice(-8);
+    const activeSchemesForApi = matchedSchemesRef.current;
+    const pendingQuestionsForApi = eligibilityQuestionsRef.current;
 
     try {
+      // Return scheme cards, eligibility questions/verdicts & crisp spoken summary immediately, then play verified WAV audio
       const res = await askSchemeAgent(trimmed, historyForApi, {
-        includeAudio: shouldSpeak,
+        includeAudio: false,
         voiceName: currentVoice,
+        activeSchemes: activeSchemesForApi,
+        pendingQuestions: pendingQuestionsForApi,
+        eligibilityAnswers: structuredAnswers,
       });
 
       if (!res?.success) {
@@ -795,10 +1127,21 @@ function AgentWorkspace() {
         { role: 'assistant', content: res.reply },
       ];
 
-      // Update visible Scheme Detail Cards whenever matching schemes are returned
+      // Update 2-stage scheme flow cleanly
       if (Array.isArray(res.matchedSchemes) && res.matchedSchemes.length > 0) {
         setMatchedSchemes(res.matchedSchemes);
+        setFocusedSchemeId(null);
         setLiveSources(Array.isArray(res.liveSources) ? res.liveSources : []);
+        const nextStage = res.stage === 'ask_eligibility' ? 'ask_eligibility' : 'show_details';
+        setSchemeStage(nextStage);
+        if (nextStage === 'ask_eligibility') {
+          setEligibilityQuestions(Array.isArray(res.eligibilityQuestions) ? res.eligibilityQuestions : []);
+          setEligibilityAnswers({});
+          setEligibilityExtraNote('');
+        } else {
+          setEligibilityQuestions([]);
+          setEligibilityExtraNote('');
+        }
       } else if (Array.isArray(res.liveSources) && res.liveSources.length > 0) {
         setLiveSources(res.liveSources);
       }
@@ -836,6 +1179,55 @@ function AgentWorkspace() {
       setError(errMsg);
       setAgentStatus('idle');
     }
+  };
+
+  const handleSelectEligibilityAnswer = (questionId, option) => {
+    setEligibilityAnswers((prev) => ({
+      ...prev,
+      [questionId]: option,
+    }));
+  };
+
+  const handleSubmitEligibilityAnswers = () => {
+    const qaParts = eligibilityQuestions
+      .map((q) => {
+        const ans = eligibilityAnswers[q.id];
+        return ans ? `${q.question} -> ${ans}` : null;
+      })
+      .filter(Boolean);
+
+    const trimmedNote = eligibilityExtraNote.trim();
+    if (trimmedNote) {
+      qaParts.push(`Additional details -> ${trimmedNote}`);
+    }
+
+    const qaSummary = qaParts.join('; ');
+    if (!qaSummary) return;
+
+    const structuredPayload = {};
+    eligibilityQuestions.forEach((q) => {
+      if (eligibilityAnswers[q.id]) {
+        structuredPayload[q.question] = eligibilityAnswers[q.id];
+      }
+    });
+    if (trimmedNote) {
+      structuredPayload['Additional details'] = trimmedNote;
+    }
+
+    sendSpokenQuestion(
+      `Here are my eligibility answers: ${qaSummary}. Please check my eligibility and proceed with the full scheme details and eligibility criteria.`,
+      structuredPayload
+    );
+  };
+
+  const handleSkipToAllDetails = () => {
+    setFocusedSchemeId(null);
+    setSchemeStage('show_details');
+  };
+
+  const handleProceedSingleScheme = (scheme) => {
+    setFocusedSchemeId(scheme._id);
+    setSchemeStage('show_details');
   };
 
   const stopMediaRecorderAndSend = () => {
@@ -1175,6 +1567,11 @@ function AgentWorkspace() {
     stopAllListening();
     historyRef.current = [];
     setMatchedSchemes([]);
+    setSchemeStage('chat');
+    setEligibilityQuestions([]);
+    setEligibilityAnswers({});
+    setEligibilityExtraNote('');
+    setFocusedSchemeId(null);
     setLiveSources([]);
     setLatestSpokenReply(null);
     setError(null);
@@ -1189,18 +1586,30 @@ function AgentWorkspace() {
   };
 
   const statusLabel = {
-    idle: hasSchemes ? 'Tap the orb to ask another question' : GREETING_TEXT,
+    idle:
+      schemeStage === 'ask_eligibility' && hasSchemes
+        ? 'Speak your answers to the orb or choose below to check eligibility'
+        : hasSchemes
+          ? 'Tap the orb to ask another question'
+          : GREETING_TEXT,
     listening: 'Listening...',
     transcribing: 'Understanding your voice...',
-    thinking: 'Finding schemes & eligibility...',
+    thinking:
+      schemeStage === 'ask_eligibility'
+        ? 'Checking your eligibility & preparing scheme details...'
+        : 'Finding schemes & eligibility...',
     speaking:
       speakingMessageId === 'initial-greeting' ? GREETING_TEXT : 'Speaking...',
   }[agentStatus];
 
+  const isEligibilityOverlayActive =
+    hasSchemes && schemeStage === 'ask_eligibility' && eligibilityQuestions.length > 0;
+
   return (
     <div className="min-h-screen h-screen bg-[#FCFCFD] text-neutral-900 flex flex-col relative overflow-hidden font-sans">
       {/* Minimalist top bar */}
-      <header className="relative z-30 w-full max-w-4xl mx-auto px-4 sm:px-6 pt-4 pb-2 flex items-center justify-between shrink-0">
+      <header className="relative z-50 w-full bg-[#FCFCFD]/95 backdrop-blur-sm shrink-0">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 pt-4 pb-2 flex items-center justify-between">
         {/* Left circular menu button */}
         <button
           type="button"
@@ -1272,6 +1681,7 @@ function AgentWorkspace() {
               />
             </svg>
           </button>
+        </div>
         </div>
       </header>
 
@@ -1461,16 +1871,75 @@ function AgentWorkspace() {
             )}
           </div>
 
-          {/* Matched Scheme Cards: Eligibility & Application Details Immediately Shown */}
-          {hasSchemes && (
-            <section className="space-y-4 pb-8 animate-fade-in-up">
+          {/* Stage 1: Matching Schemes Blurred Behind the Interactive Eligibility Form */}
+          {hasSchemes && schemeStage === 'ask_eligibility' && (
+            <section
+              className={`space-y-5 pb-8 transition-all duration-300 ${
+                isEligibilityOverlayActive
+                  ? 'blur-[6px] opacity-60 pointer-events-none select-none'
+                  : 'animate-fade-in-up'
+              }`}
+              aria-hidden={isEligibilityOverlayActive}
+            >
               <div className="flex items-center justify-between px-1">
                 <h2 className="text-xs font-mono font-bold uppercase tracking-widest text-neutral-500">
-                  Matching Schemes & Application Details ({matchedSchemes.length})
+                  Step 1 · Matching Schemes Found ({matchedSchemes.length})
                 </h2>
               </div>
 
-              {matchedSchemes.map((scheme) => (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {matchedSchemes.map((scheme) => (
+                  <SchemeOverviewCard
+                    key={scheme._id}
+                    scheme={scheme}
+                    onProceedSingle={handleProceedSingleScheme}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Stage 2: Proceed With Full Scheme Details & Displayed Eligibility Criteria */}
+          {hasSchemes && schemeStage !== 'ask_eligibility' && (
+            <section className="space-y-4 pb-8 animate-fade-in-up">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                <h2 className="text-xs font-mono font-bold uppercase tracking-widest text-neutral-500">
+                  Scheme Details, Eligibility Criteria & How to Apply (
+                  {focusedSchemeId
+                    ? 1
+                    : matchedSchemes.length}
+                  )
+                </h2>
+
+                <div className="flex items-center gap-3">
+                  {focusedSchemeId && matchedSchemes.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setFocusedSchemeId(null)}
+                      className="text-xs font-semibold text-[#2563EB] hover:underline"
+                    >
+                      Show All ({matchedSchemes.length})
+                    </button>
+                  )}
+                  {eligibilityQuestions.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFocusedSchemeId(null);
+                        setSchemeStage('ask_eligibility');
+                      }}
+                      className="text-xs font-semibold text-neutral-600 hover:text-neutral-900"
+                    >
+                      ← Back to Eligibility Check
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {(focusedSchemeId
+                ? matchedSchemes.filter((s) => s._id === focusedSchemeId)
+                : matchedSchemes
+              ).map((scheme) => (
                 <SchemeDetailCard
                   key={scheme._id}
                   scheme={scheme}
@@ -1506,8 +1975,25 @@ function AgentWorkspace() {
         </div>
       </main>
 
+      {/* Centered Eligibility Form Modal Overlay (shown over blurred schemes during eligibility check) */}
+      {isEligibilityOverlayActive && (
+        <EligibilityFormModal
+          schemeCount={matchedSchemes.length}
+          questions={eligibilityQuestions}
+          answers={eligibilityAnswers}
+          extraNote={eligibilityExtraNote}
+          onExtraNoteChange={setEligibilityExtraNote}
+          onSelectAnswer={handleSelectEligibilityAnswer}
+          onSubmit={handleSubmitEligibilityAnswers}
+          onSkipToDetails={handleSkipToAllDetails}
+          agentStatus={agentStatus}
+          onVoiceTap={handleOrbClick}
+          disabled={agentStatus === 'thinking' || agentStatus === 'transcribing'}
+        />
+      )}
+
       {/* Bottom Floating Bar — Clean Centered Black Cross ('✕') Button Only */}
-      <div className="fixed bottom-0 left-0 right-0 z-30 bg-gradient-to-t from-[#FCFCFD] via-[#FCFCFD]/90 to-transparent pt-4 pb-6 px-4 flex items-center justify-center pointer-events-none">
+      <div className="fixed bottom-0 left-0 right-0 z-50 bg-gradient-to-t from-[#FCFCFD] via-[#FCFCFD]/90 to-transparent pt-4 pb-6 px-4 flex items-center justify-center pointer-events-none">
         <button
           type="button"
           onClick={handleClose}

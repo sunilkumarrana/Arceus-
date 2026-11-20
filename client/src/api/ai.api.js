@@ -1,4 +1,4 @@
-import { api } from './api';
+import { api, getAuthHeaders } from './api';
 
 export const explainScheme = async (schemeId) => {
   const response = await api.post('/api/ai/explain', { schemeId });
@@ -23,13 +23,22 @@ export const refineSchemes = async (query, schemes) => {
 export const askSchemeAgent = async (
   message,
   history = [],
-  { includeAudio = true, voiceName = 'Zephyr' } = {}
+  {
+    includeAudio = false,
+    voiceName = 'Zephyr',
+    activeSchemes = [],
+    pendingQuestions = [],
+    eligibilityAnswers = null,
+  } = {}
 ) => {
   const response = await api.post('/api/ai/agent', {
     message,
     history,
     includeAudio,
     voiceName,
+    activeSchemes,
+    pendingQuestions,
+    eligibilityAnswers,
   });
   return response.data;
 };
@@ -44,3 +53,12 @@ export const speakAgentText = async (text, voiceName = 'Zephyr') => {
   return response.data;
 };
 
+export const fetchSpeakStream = async (text, voiceName = 'Zephyr', signal) => {
+  const headers = await getAuthHeaders();
+  return fetch('/api/ai/speak-stream', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ text, voiceName }),
+    signal,
+  });
+};
