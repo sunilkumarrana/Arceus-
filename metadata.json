@@ -1,5 +1,5 @@
 {
-  "name": "GovtCompass",
+  "name": "MERAI",
   "description": "Discover Indian government schemes, scholarships, subsidies, and welfare programs matched to your eligibility profile.",
   "requestFramePermissions": [
     "microphone"
